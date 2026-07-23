@@ -1,6 +1,7 @@
 using RandomDraws
 using Statistics
 using LinearAlgebra
+using Random
 using Test
 
 # MCMCChains is a test-target dependency that exercises the package extension.
@@ -204,6 +205,29 @@ end
         x = RandomDraw(rand(1000))
         y = x + x
         @test y isa RandomDraw{Float64}
+    end
+
+    @testset "eltype preservation (M4/M5/M7)" begin
+        # M5: as_rs(::Number) preserves the number's type instead of forcing Float64.
+        @test as_rs(3) isa RandomDraw{Int, 0}
+        @test as_rs(0.1f0) isa RandomDraw{Float32, 0}
+        @test as_rs(1 + 2im) isa RandomDraw{Complex{Int}, 0}
+        @test draws(as_rs(3)) == [3]
+        @test as_rs(2.0) isa RandomDraw{Float64, 0}   # still works
+
+        # M4: rvar_rng preserves the sampler's eltype.
+        r = rvar_rng(n -> rand(1:6, n), 3; ndraws=500)
+        @test r isa RandomDraw{Int, 1}
+        @test size(r) == (3,)
+        @test ndraws(r) == 500
+
+        # M7: rand honors and validates the requested dimensionality N.
+        rng = MersenneTwister(0)
+        a = rand(rng, RandomDraw{Float64, 2}, (2, 3), 100)
+        @test a isa RandomDraw{Float64, 2}
+        @test size(a) == (2, 3)
+        @test ndraws(a) == 100
+        @test_throws ErrorException rand(rng, RandomDraw{Float64, 2}, (3,), 100)
     end
 
     @testset "nchains propagation (H5/H6/M6)" begin

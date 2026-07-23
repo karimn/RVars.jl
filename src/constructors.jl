@@ -52,13 +52,13 @@ end
 
 function as_rs(x::Number)
     data = fill(x, 1)
-    RandomDraw{Float64, 0, typeof(data)}(data, 1)
+    RandomDraw{typeof(x), 0, typeof(data)}(data, 1)
 end
 
 function rvar_rng(rng_func::Function, n::Int, args...; ndraws::Int=2000, kwargs...)
     result = rng_func(ndraws * n, args...; kwargs...)
     reshaped = reshape(result, ndraws, n)
-    RandomDraw{Float64, 1, typeof(reshaped)}(reshaped, 1)
+    RandomDraw{eltype(reshaped), 1, typeof(reshaped)}(reshaped, 1)
 end
 
 function Base.rand(rng::AbstractRNG, ::Type{RandomDraw{T, 0}}, n_draws::Int=2000) where {T}
@@ -67,7 +67,8 @@ function Base.rand(rng::AbstractRNG, ::Type{RandomDraw{T, 0}}, n_draws::Int=2000
 end
 
 function Base.rand(rng::AbstractRNG, ::Type{RandomDraw{T, N}}, dims::Dims, n_draws::Int=2000) where {T, N}
+    length(dims) == N || error("Requested RandomDraw{$T, $N} but dims=$dims has $(length(dims)) dimensions")
     sz = (n_draws, dims...)
     data = rand(rng, T, sz)
-    RandomDraw(data)
+    RandomDraw{T, N, typeof(data)}(data, 1)
 end
