@@ -47,8 +47,18 @@ code depends on, in exchange for fixing three methods.
 4. `Base.isequal(x::RandomDraw, y::RandomDraw)::Bool` compares `draws`, `nchains` and
    `names`, returning a genuine `Bool`. `==` keeps its elementwise meaning
    (`src/arithmetic.jl:69` returns a `RandomDraw{Bool}` by design, mirroring R's `rvar`),
-   which today leaves no Bool-returning identity test — breaking `@test x == y`, `x in xs`
-   and `Dict` keys.
+   which today leaves no Bool-returning identity test.
+
+   **Correction, from the whole-branch review.** An earlier draft of this line claimed the
+   missing identity test breaks "`@test x == y`, `x in xs` and `Dict` keys", implying
+   `isequal` fixes all three. It does not. `Base.in` and `@test x == y` dispatch on `==`,
+   not `isequal`, and still throw `TypeError: non-boolean ... used in boolean context`.
+   `isequal` fixes only the hash-based containers, `Dict` and `Set`. The wrong claim
+   propagated verbatim into the shipped docstring; both are corrected.
+
+   `isequal` must also be **total**: `isequal(x, plain_array)` would otherwise fall through
+   to Base's `isequal(::AbstractArray, ::AbstractArray)`, which compares elements with `==`
+   and therefore throws. Two fallback methods returning `false` close that.
 5. `Base.hash(x::RandomDraw, h::UInt)` hashes the same three fields, so `isequal` implies
    equal hashes and `Dict` keys actually work. This is required, not optional: Base's
    generic `hash(::AbstractArray)` hashes elements, an element of a `RandomDraw` is
@@ -130,6 +140,13 @@ two disagreeing name sets cannot be reconciled, so the result is unnamed. Applie
 `_binop_scalar`, `_binop_rv`, the unary and metaprogrammed elementwise math functions, and
 broadcast's `similar(::Broadcasted, ::Type)`.
 
+**Refinement, from the whole-branch review.** "Constants defer" is not quite "constants are
+ignored". A named single-draw RV whose names are the *only* ones present must keep them —
+otherwise `sd + 1` and `sd .+ 1` disagree on the same value, since `src/arithmetic.jl` reads
+`x.names` directly while broadcasting goes through `_combine_names`. A constant's names are
+therefore weaker evidence, retained as a fallback when no multi-draw operand supplies any,
+rather than discarded outright.
+
 ### Name-based indexing
 
 - `x[:alpha]` → scalar `RandomDraw{T, 0}`.
@@ -163,6 +180,27 @@ Four new `@testset` blocks in `test/runtests.jl`, all value-based:
 3. Name-based indexing — scalar and vector forms, correct subsetting of names, and the
    unknown-name error.
 4. MCMCChains names round-trip, guarded by the existing `HAS_MCMCCHAINS` flag.
+
+## Known gaps at merge (follow-up work)
+
+Surfaced by the whole-branch review and deliberately not fixed here.
+
+- **Broadcasting a `RandomDraw` against a plain non-scalar array is broken.** `x .+ [10.0,
+  20.0, 30.0]` throws `DimensionMismatch`; `copy(::Broadcasted)` in `src/broadcast.jl`
+  passes non-`RandomDraw` arguments through whole instead of indexing them. Pre-existing —
+  it fails identically at the branch point — but it is the largest remaining functional
+  hole, the workaround (`as_rs`) is undiscoverable from the error, and `map(f, rd, plain)`
+  now routes into it. Fix: index plain array operands by `I` with the same singleton
+  projection `_bcast_elem` already uses.
+- **23 method ambiguities**, 9 involving this branch's mixed RV/plain-array products
+  colliding with `LinearAlgebra`'s `Diagonal`/`AbstractTriangular`/`Adjoint` and
+  `SparseArrays`. Related and pre-existing: `v * w` for two *vector* RVs is ambiguous
+  between `arithmetic.jl` and `matmul.jl`, so their elementwise product throws
+  (`.*` works). Worth an explicit method plus a `detect_ambiguities` regression test.
+- **`map` is asymmetric in argument order.** `map(+, rd, plain)` takes the package path;
+  `map(+, plain, rd)` falls through to Base and returns a `Vector{RandomDraw{T,0}}`.
+- **Typed materialization still throws.** `collect(Float64, x)`, `convert(Array{Float64},
+  x)` and `Array{Float64}(x)` all raise `MethodError`. Documented rather than fixed.
 
 ## Out of scope
 
