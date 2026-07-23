@@ -62,8 +62,12 @@ Pass `nchains` to declare how many chains are packed into the draws axis (it mus
 `ndraws`). Pass `with_chains=true` when `x` is instead `(iterations, chains, shape...)`;
 the first two axes are then flattened into the draws axis and `nchains` is taken from the
 data (an explicit `nchains` is ignored, with a warning).
+
+Pass `names` (a vector of `Symbol`s) to label the elements of a vector random variable;
+this is only valid when the result has `N == 1`.
 """
-function RandomDraw(x::AbstractArray{T}; nchains::Int=1, with_chains::Bool=false) where {T}
+function RandomDraw(x::AbstractArray{T}; nchains::Int=1, with_chains::Bool=false,
+                    names::Union{Nothing, AbstractVector{Symbol}}=nothing) where {T}
     if with_chains
         if nchains != 1
             @warn "with_chains=true derives nchains from the data; ignoring nchains=$nchains"
@@ -75,15 +79,15 @@ function RandomDraw(x::AbstractArray{T}; nchains::Int=1, with_chains::Bool=false
         new_sz = (n_iter * n_chain, rest...)
         reshaped = reshape(x, new_sz)
         n_out = length(rest)
-        return RandomDraw{T, n_out, typeof(reshaped)}(reshaped, n_chain)
+        return RandomDraw{T, n_out, typeof(reshaped)}(reshaped, n_chain, names)
     end
     if ndims(x) == 1
         # A flat vector is a scalar RV whose draws are the whole vector; honor nchains.
-        return RandomDraw{T, 0, typeof(x)}(x, nchains)
+        return RandomDraw{T, 0, typeof(x)}(x, nchains, names)
     end
     sz = size(x)
     n_out = length(sz) - 1
-    return RandomDraw{T, n_out, typeof(x)}(x, nchains)
+    return RandomDraw{T, n_out, typeof(x)}(x, nchains, names)
 end
 
 function RandomDraw(x::RandomDraw)

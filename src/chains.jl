@@ -7,9 +7,9 @@ layout produced by MCMC samplers. The result is a `RandomDraw{T, 1}` of length `
 with `nchains` chains; iterations and chains are folded into the draws axis (iterations
 fastest) so per-variable draws stay contiguous.
 
-When `param_names` (a vector of `Symbol`s or `String`s) is given, returns the tuple
-`(rd, names)`. Note the names are **not** stored on the returned `RandomDraw`; the second
-value is passed through for the caller to keep alongside it.
+When `param_names` (a vector of `Symbol`s or `String`s) is given, the names are attached to
+the returned value and are readable with [`variables`](@ref); `param_names` must have one
+entry per variable.
 
 With the `MCMCChains` extension loaded, `from_chains(::MCMCChains.Chains)` (and the
 `RandomDraw(::Chains)` constructor) accept a `Chains` object directly.
@@ -26,7 +26,8 @@ end
 
 function from_chains(array::AbstractArray{T, 3}, param_names::AbstractVector{Symbol}) where {T}
     rd = from_chains(array)
-    rd, param_names
+    d = draws(rd)
+    RandomDraw{T, 1, typeof(d)}(d, nchains(rd), param_names)
 end
 
 function from_chains(array::AbstractArray{T, 3}, param_names::AbstractVector{String}) where {T}

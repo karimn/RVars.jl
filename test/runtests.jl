@@ -178,13 +178,13 @@ end
         @test nchains(rd) == 4
         @test niterations(rd) == 200
 
-        rd2, names = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp])
+        rd2 = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp])
         @test rd2 isa RandomDraw
-        @test names == [:mu, :sigma, :alpha, :beta, :lp]
+        @test variables(rd2) == [:mu, :sigma, :alpha, :beta, :lp]
 
-        rd3, names3 = from_chains(data, ["mu", "sigma", "alpha", "beta", "lp"])
+        rd3 = from_chains(data, ["mu", "sigma", "alpha", "beta", "lp"])
         @test rd3 isa RandomDraw
-        @test names3 == [:mu, :sigma, :alpha, :beta, :lp]
+        @test variables(rd3) == [:mu, :sigma, :alpha, :beta, :lp]
     end
 
     @testset "Matrix multiplication" begin
@@ -573,6 +573,40 @@ end
         dict = Dict(x => "unnamed", named => "named")
         @test dict[RandomDraw(d)] == "unnamed"
         @test length(dict) == 2
+    end
+
+    @testset "Attaching names" begin
+        # from_chains attaches names to the value itself, not alongside it.
+        A = [100c + 10v + i for i in 1:2, v in 1:3, c in 1:4]
+        rd = from_chains(A, [:alpha, :beta, :gamma])
+        @test variables(rd) == [:alpha, :beta, :gamma]
+        @test nchains(rd) == 4
+        # Attaching names must not disturb the draws layout.
+        @test draws(rd) == draws(from_chains(A))
+
+        # Wrong number of names is rejected.
+        @test_throws ErrorException from_chains(A, [:alpha, :beta])
+
+        # The RandomDraw constructor takes a names kwarg.
+        d = reshape(collect(1.0:12.0), 4, 3)
+        x = RandomDraw(d; names=[:a, :b, :c])
+        @test variables(x) == [:a, :b, :c]
+        @test draws(x) == d
+
+        # names composes with nchains.
+        xc = RandomDraw(d; nchains=2, names=[:a, :b, :c])
+        @test nchains(xc) == 2
+        @test variables(xc) == [:a, :b, :c]
+
+        # names composes with with_chains.
+        wc = reshape(collect(1.0:24.0), 2, 4, 3)   # (iterations, chains, 3 vars)
+        xw = RandomDraw(wc; with_chains=true, names=[:a, :b, :c])
+        @test nchains(xw) == 4
+        @test variables(xw) == [:a, :b, :c]
+
+        # Names on a non-vector RV are rejected.
+        d2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        @test_throws ErrorException RandomDraw(d2; names=[:a, :b])
     end
 
     if HAS_MCMCCHAINS
