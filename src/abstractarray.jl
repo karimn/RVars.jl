@@ -1,30 +1,21 @@
 Base.IndexStyle(::Type{<:RandomDraw}) = IndexLinear()
 
+# The store has the draws on axis 1 and the visible shape on axes 2..N+1. Collapse
+# those trailing axes into a single (ndraws, nelements) matrix so an element's draws
+# are a valid `[:, col]` slice. Column j here matches column-major linear index j of
+# the visible array (and `LinearIndices(size(x))`), so linear/Cartesian access agree.
+_flat_store(x::RandomDraw) = reshape(x.draws, size(x.draws, 1), :)
+
 function Base.getindex(x::RandomDraw{T, N}, i::Int) where {T, N}
-    d = x.draws
-    n_draws = size(d, 1)
-    total = length(x)
-    if i < 1 || i > total
-        throw(BoundsError(x, i))
-    end
-    data = d[:, i]
+    @boundscheck checkbounds(x, i)
+    data = _flat_store(x)[:, i]
     RandomDraw{T, 0, typeof(data)}(data, x.nchains)
 end
 
 function Base.getindex(x::RandomDraw{T, N}, I::Vararg{Int, N}) where {T, N}
-    d = x.draws
-    n_draws = size(d, 1)
-    sz = size(d)
-    indices = map((i, dim_sz) -> min(i, dim_sz), I, sz[2:end])
-    linear_idx = 1
-    for (dim_idx, idx) in enumerate(indices)
-        stride = prod(sz[(dim_idx+2):end])
-        linear_idx += (idx - 1) * stride
-    end
-    if linear_idx < 1 || linear_idx > prod(sz[2:end])
-        throw(BoundsError(x, I))
-    end
-    data = d[:, linear_idx]
+    @boundscheck checkbounds(x, I...)
+    col = LinearIndices(size(x))[I...]
+    data = _flat_store(x)[:, col]
     RandomDraw{T, 0, typeof(data)}(data, x.nchains)
 end
 
@@ -32,33 +23,23 @@ function Base.getindex(x::RandomDraw{T, N}, idx::AbstractArray{Bool}) where {T, 
     if length(idx) != length(x)
         throw(DimensionMismatch("logical index length $(length(idx)) != length $(length(x))"))
     end
-    d = x.draws
-    flat_idx = vec(idx)
-    result_draws = d[:, flat_idx]
-    sz = size(result_draws)
-    RandomDraw{eltype(result_draws), length(sz) - 1, typeof(result_draws)}(result_draws, x.nchains)
+    result_draws = _flat_store(x)[:, vec(idx)]
+    RandomDraw{eltype(result_draws), 1, typeof(result_draws)}(result_draws, x.nchains)
 end
 
 function Base.setindex!(x::RandomDraw{T, N}, val::Number, i::Int) where {T, N}
-    d = x.draws
-    total = length(x)
-    if i < 1 || i > total
-        throw(BoundsError(x, i))
-    end
-    d[:, i] .= val
+    @boundscheck checkbounds(x, i)
+    _flat_store(x)[:, i] .= val
     return x
 end
 
 function Base.setindex!(x::RandomDraw, val::RandomDraw, i::Int)
+    @boundscheck checkbounds(x, i)
     vd = draws(val)
     if size(vd, 1) == 1
         vd = repeat(vd, size(x.draws, 1))
     end
-    total = length(x)
-    if i < 1 || i > total
-        throw(BoundsError(x, i))
-    end
-    x.draws[:, i] .= vec(vd)
+    _flat_store(x)[:, i] .= vec(vd)
     return x
 end
 

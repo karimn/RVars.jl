@@ -59,11 +59,30 @@ function _broadcast_draws(x::RandomDraw, n::Int)
     end
     new_sz = (n, sz[2:end]...)
     new_data = similar(old, new_sz)
+    ci = CartesianIndices(sz[2:end])
     for i in 1:n
-        ci = CartesianIndices(sz[2:end])
         for c in ci
             new_data[i, c] = old[1, c]
         end
     end
     return new_data
+end
+
+# Combine nchains across operands of an elementwise/broadcast operation. An operand
+# with a single draw is a constant with no chain structure, so it defers to the other
+# operand's nchains rather than forcing a collapse. Two genuine but differing chain
+# counts cannot be aligned, so the result loses its chain structure (nchains = 1).
+function _combine_nchains(operands...)
+    nc = 0  # 0 = not yet seen a non-constant operand
+    for x in operands
+        x isa RandomDraw || continue
+        size(x.draws, 1) == 1 && continue  # constant: chain-agnostic
+        c = x.nchains
+        if nc == 0
+            nc = c
+        elseif c != nc
+            nc = 1
+        end
+    end
+    return nc == 0 ? 1 : nc
 end

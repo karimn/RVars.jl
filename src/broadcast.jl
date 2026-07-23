@@ -24,21 +24,22 @@ function Base.BroadcastStyle(s::RandomDrawStyle{M}, ::Base.Broadcast.Style{Tuple
 end
 
 function Base.similar(bc::Base.Broadcast.Broadcasted{RandomDrawStyle{N}}, ::Type{T}) where {N, T}
-    nc = 1
     src_draws = nothing
+    n_draws = 1
     for a in bc.args
         if a isa RandomDraw
-            nc = a.nchains
             if src_draws === nothing
                 src_draws = a.draws
             end
+            # Draw axis must hold the full broadcast result; a 1-draw constant recycles.
+            n_draws = max(n_draws, size(a.draws, 1))
         end
     end
     axs = axes(bc)
     if src_draws === nothing
         return Array{T}(undef, axs...)
     end
-    n_draws = size(src_draws, 1)
+    nc = _combine_nchains(bc.args...)
     sz = (n_draws, length.(axs)...)
     data = similar(src_draws, T, sz)
     RandomDraw{T, N, typeof(data)}(data, nc)
@@ -58,27 +59,18 @@ function Base.copy(bc::Base.Broadcast.Broadcasted{RandomDrawStyle{N}}) where {N}
     return dest
 end
 
+# Extract the scalar RV at broadcast position `idx` (a CartesianIndex over the
+# destination shape). Singleton dims of this argument are held at index 1 so ordinary
+# broadcast expansion works; the flattened column matches column-major LinearIndices.
 function _bcast_elem(x::RandomDraw{T}, idx::CartesianIndex) where {T}
-    d = draws(x)
-    sz = size(d)
-    n_draws = sz[1]
-    rest_sz = sz[2:end]
-    n_rest = prod(rest_sz)
-    if n_rest == 1
-        return RandomDraw{T, 0, typeof(d[:, 1])}(d[:, 1], x.nchains)
+    flat = reshape(draws(x), size(draws(x), 1), :)
+    sz = size(x)
+    if isempty(sz)
+        data = flat[:, 1]
+        return RandomDraw{T, 0, typeof(data)}(data, x.nchains)
     end
-    linear_idx = 1
-    for i in 1:length(rest_sz)
-        stride = prod(rest_sz[i+1:end])
-        di = idx[i]
-        if di < 1 || di > rest_sz[i]
-            throw(BoundsError(x, idx))
-        end
-        linear_idx += (di - 1) * stride
-    end
-    if linear_idx < 1 || linear_idx > n_rest
-        throw(BoundsError(x, idx))
-    end
-    data = d[:, linear_idx]
+    proj = ntuple(k -> sz[k] == 1 ? 1 : idx[k], length(sz))
+    col = LinearIndices(sz)[proj...]
+    data = flat[:, col]
     RandomDraw{T, 0, typeof(data)}(data, x.nchains)
 end

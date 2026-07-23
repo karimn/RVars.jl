@@ -206,6 +206,82 @@ end
         @test y isa RandomDraw{Float64}
     end
 
+    @testset "Indexing value correctness (C2/H1/H2)" begin
+        nd = 5
+        # store[k, i, j] distinguishable per (draw, row, col); visible shape (2, 3).
+        store = [1000k + 10i + j for k in 1:nd, i in 1:2, j in 1:3]
+        x = RandomDraw(store)
+        @test x isa RandomDraw{Int, 2}
+        @test size(x) == (2, 3)
+        @test length(x) == 6
+
+        # Cartesian access returns the correct element's draws (H1: column-major).
+        for i in 1:2, j in 1:3
+            el = x[i, j]
+            @test el isa RandomDraw{Int, 0}
+            @test draws(el) == store[:, i, j]
+        end
+
+        # Linear indexing is column-major and agrees with Cartesian.
+        li = LinearIndices((2, 3))
+        for i in 1:2, j in 1:3
+            @test draws(x[li[i, j]]) == draws(x[i, j])
+        end
+        @test draws(x[3]) == store[:, 1, 2]   # column-major: 3 -> (1,2)
+
+        # H2: out-of-range indices must throw, not clamp to the last element.
+        @test_throws BoundsError x[7]
+        @test_throws BoundsError x[0]
+        v = RandomDraw(randn(50, 3))          # N=1
+        @test_throws BoundsError v[4]
+        @test_throws BoundsError v[100]
+
+        # Materializing elements into scalar RVs via a comprehension round-trips.
+        c = [x[i, j] for i in 1:2, j in 1:3]
+        @test c isa Matrix{<:RandomDraw}
+        @test draws(c[2, 3]) == store[:, 2, 3]
+
+        # Logical indexing selects the right columns (flattened, column-major).
+        mask = [true false true; false true false]   # shape (2,3)
+        sel = x[mask]
+        @test sel isa RandomDraw{Int, 1}
+        @test size(sel) == (3,)
+        expected_cols = findall(vec(mask))
+        flat = reshape(store, nd, 6)
+        @test draws(sel) == flat[:, expected_cols]
+
+        # setindex! (scalar) writes across all draws of one element.
+        y = RandomDraw(zeros(nd, 2, 3))
+        y[li[2, 3]] = 7.0
+        @test all(draws(y[2, 3]) .== 7.0)
+        @test all(draws(y[1, 1]) .== 0.0)
+        @test_throws BoundsError (y[7] = 1.0)
+    end
+
+    @testset "Broadcasting over N>=2 RVs (H3)" begin
+        nd = 8
+        store = reshape(collect(1.0:(nd * 6)), nd, 2, 3)
+        x = RandomDraw(store)
+
+        s = sin.(x)
+        @test s isa RandomDraw{Float64, 2}
+        @test size(s) == (2, 3)
+        @test draws(s[1, 2]) == sin.(store[:, 1, 2])
+
+        a = x .+ 0.0
+        @test draws(a[2, 3]) == store[:, 2, 3]
+
+        t = x .+ x
+        @test draws(t[2, 1]) == store[:, 2, 1] .+ store[:, 2, 1]
+
+        # Broadcasting a scalar-RV against a vector-RV expands the singleton.
+        c = as_rs(10.0)                        # N=0, 1 draw
+        w = RandomDraw(randn(nd, 3))
+        cw = c .+ w
+        @test cw isa RandomDraw{Float64, 1}
+        @test size(cw) == (3,)
+    end
+
     @testset "from_chains value correctness (C1)" begin
         # A[i, v, c] carries a distinguishable value per (iteration, variable, chain).
         n_iter, n_var, n_chain = 2, 3, 4
