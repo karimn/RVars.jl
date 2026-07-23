@@ -24,9 +24,12 @@ function Base.BroadcastStyle(s::RandomDrawStyle{M}, ::Base.Broadcast.Style{Tuple
 end
 
 function Base.similar(bc::Base.Broadcast.Broadcasted{RandomDrawStyle{N}}, ::Type{T}) where {N, T}
+    # A fused expression (x .* 2 .+ 1) nests Broadcasted objects inside bc.args, hiding the
+    # RandomDraw operands. Flatten first so the args are leaves and the scan below sees them.
+    bcf = Base.Broadcast.flatten(bc)
     src_draws = nothing
     n_draws = 1
-    for a in bc.args
+    for a in bcf.args
         if a isa RandomDraw
             if src_draws === nothing
                 src_draws = a.draws
@@ -39,21 +42,24 @@ function Base.similar(bc::Base.Broadcast.Broadcasted{RandomDrawStyle{N}}, ::Type
     if src_draws === nothing
         return Array{T}(undef, axs...)
     end
-    nc = _combine_nchains(bc.args...)
+    nc = _combine_nchains(bcf.args...)
     sz = (n_draws, length.(axs)...)
     data = similar(src_draws, T, sz)
     RandomDraw{T, N, typeof(data)}(data, nc)
 end
 
 function Base.copy(bc::Base.Broadcast.Broadcasted{RandomDrawStyle{N}}) where {N}
-    sample_args = map(a -> a isa RandomDraw ? a[1] : a, bc.args)
-    sample_result = bc.f(sample_args...)
+    # Flatten so bc.args holds only leaf operands and bcf.f is the composed function;
+    # otherwise a nested Broadcasted would be passed straight through to bc.f.
+    bcf = Base.Broadcast.flatten(bc)
+    sample_args = map(a -> a isa RandomDraw ? a[1] : a, bcf.args)
+    sample_result = bcf.f(sample_args...)
     T_rd = typeof(sample_result)
     T_inner = eltype(T_rd)
-    dest = similar(bc, T_inner)
+    dest = similar(bcf, T_inner)
     for I in CartesianIndices(size(dest))
-        args = map(a -> a isa RandomDraw ? _bcast_elem(a, I) : a, bc.args)
-        val = bc.f(args...)
+        args = map(a -> a isa RandomDraw ? _bcast_elem(a, I) : a, bcf.args)
+        val = bcf.f(args...)
         dest[I] = val
     end
     return dest

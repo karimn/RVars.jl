@@ -246,6 +246,53 @@ end
         @test length(quantile(xv, 0.5)) == 4
     end
 
+    @testset "Mixed RandomDraw / plain-array linear algebra" begin
+        nd = 15
+        dv = randn(nd, 3)        # vector RV of length 3
+        dM = randn(nd, 2, 3)     # matrix RV, 2x3
+        v = RandomDraw(dv)
+        Mv = RandomDraw(dM)
+        A = randn(3, 4)
+        B = randn(5, 3)
+        pv = randn(3)
+
+        # vector RV × plain matrix -> length 4
+        r1 = v * A
+        @test r1 isa RandomDraw{Float64, 1}
+        @test size(r1) == (4,)
+        for i in 1:nd
+            @test draws(r1)[i, :] ≈ vec(dv[i, :]' * A)
+        end
+
+        # plain matrix × vector RV -> length 5
+        r2 = B * v
+        @test r2 isa RandomDraw{Float64, 1}
+        @test size(r2) == (5,)
+        for i in 1:nd
+            @test draws(r2)[i, :] ≈ B * dv[i, :]
+        end
+
+        # matrix RV × plain vector -> length 2
+        r3 = Mv * pv
+        @test r3 isa RandomDraw{Float64, 1}
+        @test size(r3) == (2,)
+        for i in 1:nd
+            @test draws(r3)[i, :] ≈ dM[i, :, :] * pv
+        end
+
+        # dot against a plain vector, both orders
+        r4 = dot(v, pv)
+        @test r4 isa RandomDraw{Float64, 0}
+        for i in 1:nd
+            @test draws(r4)[i] ≈ dot(dv[i, :], pv)
+        end
+        r5 = dot(pv, v)
+        @test r5 isa RandomDraw{Float64, 0}
+        for i in 1:nd
+            @test draws(r5)[i] ≈ dot(pv, dv[i, :])
+        end
+    end
+
     @testset "Type stability" begin
         x = RandomDraw(rand(1000))
         y = x + x
@@ -375,6 +422,44 @@ end
         cw = c .+ w
         @test cw isa RandomDraw{Float64, 1}
         @test size(cw) == (3,)
+    end
+
+    @testset "Fused broadcast expressions" begin
+        nd = 40
+        d = randn(nd, 3)
+        x = RandomDraw(d)
+
+        r1 = sin.(x) .+ 1.0
+        @test r1 isa RandomDraw{Float64, 1}
+        @test size(r1) == (3,)
+        @test draws(r1[2]) ≈ sin.(d[:, 2]) .+ 1.0
+
+        r2 = x .* 2 .+ 1
+        @test r2 isa RandomDraw{Float64, 1}
+        @test draws(r2[1]) ≈ d[:, 1] .* 2 .+ 1
+
+        r3 = 1.0 .+ (x .* 2)
+        @test r3 isa RandomDraw{Float64, 1}
+        @test draws(r3[3]) ≈ 1.0 .+ (d[:, 3] .* 2)
+
+        # Fused expression combining two random variables.
+        y = RandomDraw(randn(nd, 3))
+        dy = draws(y)
+        r4 = (x .+ y) .* 2
+        @test r4 isa RandomDraw{Float64, 1}
+        @test draws(r4[1]) ≈ (d[:, 1] .+ dy[:, 1]) .* 2
+
+        # Fused expression over an N>=2 RV.
+        m = RandomDraw(randn(nd, 2, 3))
+        dm = draws(m)
+        r5 = m .* 2 .+ 1
+        @test r5 isa RandomDraw{Float64, 2}
+        @test size(r5) == (2, 3)
+        @test draws(r5[2, 3]) ≈ dm[:, 2, 3] .* 2 .+ 1
+
+        # nchains survives a fused expression.
+        xc = RandomDraw(randn(800, 3), nchains=4)
+        @test nchains(xc .* 2 .+ 1) == 4
     end
 
     @testset "from_chains value correctness (C1)" begin
