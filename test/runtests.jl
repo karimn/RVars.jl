@@ -737,6 +737,15 @@ end
 
             # from_chains(::Chains) is the documented alias for the constructor.
             @test draws(from_chains(chn)) == draws(rd)
+
+            # Parameter names come straight off the Chains object.
+            @test variables(rd) == [:a, :b, :cc]
+            @test variables(from_chains(chn)) == [:a, :b, :cc]
+
+            # Names line up with the right columns, so name lookup and position agree.
+            for (j, nm) in enumerate([:a, :b, :cc])
+                @test draws(rd[nm]) == draws(rd)[:, j]
+            end
         end
     else
         @info "MCMCChains not available; skipping extension tests (run via Pkg.test)"
