@@ -108,7 +108,7 @@ which means something else in Julia.
 ### Attaching names
 
 - `from_chains(array, param_names)` returns a single `RandomDraw` carrying the names,
-  replacing the `(rd, names)` tuple. **Breaking change** — acceptable at v0.1.0, and the
+  replacing the `(rd, names)` tuple. **Breaking change** — hence the 0.1.0 → 0.2.0 bump, and the
   point of the exercise.
 - `RandomDraw(x::AbstractArray; nchains, with_chains, names=nothing)` gains the kwarg.
 - The MCMCChains extension attaches names automatically. `names(chn)` returns a
