@@ -151,8 +151,11 @@ function Base.show(io::IO, x::RandomDraw{T, N}) where {T, N}
         m_vals = Statistics.mean(x)
         s_vals = Statistics.std(x)
         if N == 1
+            nms = x.names
             for i in 1:n_show
-                print(io, "\n[$i] ", round(m_vals[i]; digits=2), " ± ", round(s_vals[i]; digits=2))
+                lbl = nms === nothing ? string(i) : string(nms[i])
+                print(io, "\n[", lbl, "] ",
+                      round(m_vals[i]; digits=2), " ± ", round(s_vals[i]; digits=2))
             end
         else
             for i in 1:min(size(x, 1), 4)

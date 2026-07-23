@@ -703,6 +703,20 @@ end
         @test variables(xc .+ 1) == [:a, :b, :c]
     end
 
+    @testset "show with names" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+        named = RandomDraw(d; names=[:alpha, :beta, :gamma])
+        s = sprint(show, named)
+        @test occursin("[alpha]", s)
+        @test occursin("[beta]", s)
+        @test occursin("[gamma]", s)
+
+        # Unnamed values keep the positional labels.
+        plain = sprint(show, RandomDraw(d))
+        @test occursin("[1]", plain)
+        @test !occursin("[alpha]", plain)
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4
