@@ -48,10 +48,13 @@ function *(x::RandomDraw{T, 1}, y::RandomDraw{S, 2}) where {T, S}
     dx, dy, nc = _prep_matmul(x, y)
     n = size(dx, 1)
     m = size(dx, 2)
+    k = size(dy, 2)
     p = size(dy, 3)
+    m == k || throw(DimensionMismatch("vector length $m does not match matrix rows $k"))
     result = similar(dx, promote_type(T, S), (n, p))
     for i in 1:n
-        result[i, :] .= view(dx, i, :) * view(dy, i, :, :)
+        # Row-vector × matrix: (1×m)(m×p) -> length-p row, per draw.
+        result[i, :] .= vec(view(dx, i, :)' * view(dy, i, :, :))
     end
     RandomDraw{promote_type(T, S), 1, typeof(result)}(result, nc)
 end

@@ -201,6 +201,45 @@ end
         @test size(mv) == (3,)
     end
 
+    @testset "Linear algebra and quantile fixes (H8/M2/M3)" begin
+        nd = 20
+
+        # H8: vector-RV × matrix-RV is a per-draw row-vector × matrix (length m == k).
+        vx = randn(nd, 3)
+        my = randn(nd, 3, 2)
+        vm = RandomDraw(vx) * RandomDraw(my)
+        @test vm isa RandomDraw{Float64, 1}
+        @test size(vm) == (2,)
+        @test ndraws(vm) == nd
+        for i in 1:nd
+            @test draws(vm)[i, :] ≈ vec(vx[i, :]' * my[i, :, :])
+        end
+
+        # M2: rs_quantile reduces per draw over elements, like the rest of the rs_ family.
+        xm = RandomDraw(randn(nd, 5))
+        q = rs_quantile(xm, [0.0, 0.5, 1.0])
+        @test q isa RandomDraw{Float64, 1}
+        @test size(q) == (3,)
+        @test ndraws(q) == nd
+        dm = draws(xm)
+        for i in 1:nd
+            @test draws(q)[i, :] ≈ quantile(dm[i, :], [0.0, 0.5, 1.0])
+        end
+
+        # M3: summarise-over-draws quantile with a vector of probabilities.
+        xv = RandomDraw(randn(nd, 4))
+        qs = quantile(xv, [0.25, 0.5, 0.75])
+        @test qs isa AbstractMatrix
+        @test size(qs) == (3, 4)   # (probabilities, elements)
+        dv = draws(xv)
+        for e in 1:4
+            @test qs[:, e] ≈ quantile(dv[:, e], [0.25, 0.5, 0.75])
+        end
+        # scalar probability still reduces to a per-element vector.
+        @test quantile(xv, 0.5) isa AbstractVector
+        @test length(quantile(xv, 0.5)) == 4
+    end
+
     @testset "Type stability" begin
         x = RandomDraw(rand(1000))
         y = x + x
