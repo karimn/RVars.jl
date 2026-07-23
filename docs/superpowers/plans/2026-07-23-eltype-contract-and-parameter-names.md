@@ -568,7 +568,7 @@ function _name_index(x::RandomDraw, s::Symbol)
     nms === nothing && error("This RandomDraw has no parameter names")
     i = findfirst(isequal(s), nms)
     i === nothing &&
-        error("Unknown parameter name :$s; available: $(join(string.(nms), \", \"))")
+        error("Unknown parameter name :$s; available: $(join(string.(nms), ", "))")
     return i
 end
 
