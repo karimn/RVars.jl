@@ -1,5 +1,5 @@
 name = "RandomDraws"
-uuid = "a1b2c3d4-0000-4000-8000-000000000000"
+uuid = "108f709a-74fe-47a0-bf6a-d6e5c41d346f"
 authors = ["Karim Naguib"]
 version = "0.1.0"
 
@@ -18,7 +18,8 @@ RandomDrawsMCMCChainsExt = "MCMCChains"
 julia = "1.9"
 
 [extras]
+MCMCChains = "c7f686f2-ff18-58e9-bc7b-3106c5c0d1b0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["MCMCChains", "Test"]

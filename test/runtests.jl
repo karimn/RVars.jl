@@ -3,6 +3,16 @@ using Statistics
 using LinearAlgebra
 using Test
 
+# MCMCChains is a test-target dependency that exercises the package extension.
+# Guard it so the suite still runs under a plain `julia --project=. test/runtests.jl`
+# (where MCMCChains is not in the manifest); Pkg.test provides it via [targets].
+const HAS_MCMCCHAINS = try
+    @eval import MCMCChains
+    true
+catch
+    false
+end
+
 @testset "RandomDraws.jl" begin
 
     @testset "Constructors" begin
@@ -194,6 +204,57 @@ using Test
         x = RandomDraw(rand(1000))
         y = x + x
         @test y isa RandomDraw{Float64}
+    end
+
+    @testset "from_chains value correctness (C1)" begin
+        # A[i, v, c] carries a distinguishable value per (iteration, variable, chain).
+        n_iter, n_var, n_chain = 2, 3, 4
+        A = [100c + 10v + i for i in 1:n_iter, v in 1:n_var, c in 1:n_chain]
+        rd = from_chains(A)
+        @test nchains(rd) == n_chain
+        @test niterations(rd) == n_iter
+        @test size(rd) == (n_var,)
+
+        # draws(; with_chains) must reshape the flat draw axis back to (iter, chain, shape...)
+        # with each sample landing exactly where it came from.
+        wc = draws(rd; with_chains=true)
+        @test size(wc) == (n_iter, n_chain, n_var)
+        for i in 1:n_iter, v in 1:n_var, c in 1:n_chain
+            @test wc[i, c, v] == A[i, v, c]
+        end
+
+        # A variable's flat column must gather that variable's samples only,
+        # ordered iteration-fastest then chain.
+        d = draws(rd)
+        for v in 1:n_var
+            expected = vec([A[i, v, c] for i in 1:n_iter, c in 1:n_chain])
+            @test d[:, v] == expected
+        end
+    end
+
+    if HAS_MCMCCHAINS
+        @testset "MCMCChains extension value correctness (H7)" begin
+            n_iter, n_var, n_chain = 2, 3, 4
+            val = reshape([100c + 10v + i for i in 1:n_iter, v in 1:n_var, c in 1:n_chain],
+                          n_iter, n_var, n_chain)
+            chn = MCMCChains.Chains(val, [:a, :b, :cc])
+
+            rd = RandomDraw(chn)
+            @test rd isa RandomDraw{<:Any, 1}
+            @test size(rd) == (n_var,)
+            @test nchains(rd) == n_chain
+            @test niterations(rd) == n_iter
+
+            wc = draws(rd; with_chains=true)
+            for i in 1:n_iter, v in 1:n_var, c in 1:n_chain
+                @test wc[i, c, v] == val[i, v, c]
+            end
+
+            # from_chains(::Chains) is the documented alias for the constructor.
+            @test draws(from_chains(chn)) == draws(rd)
+        end
+    else
+        @info "MCMCChains not available; skipping extension tests (run via Pkg.test)"
     end
 
 end
