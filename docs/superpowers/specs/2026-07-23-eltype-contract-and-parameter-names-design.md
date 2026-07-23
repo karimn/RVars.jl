@@ -49,7 +49,13 @@ code depends on, in exchange for fixing three methods.
    (`src/arithmetic.jl:69` returns a `RandomDraw{Bool}` by design, mirroring R's `rvar`),
    which today leaves no Bool-returning identity test — breaking `@test x == y`, `x in xs`
    and `Dict` keys.
-5. The `RandomDraw` docstring gains an explicit "Deviations from the `AbstractArray`
+5. `Base.hash(x::RandomDraw, h::UInt)` hashes the same three fields, so `isequal` implies
+   equal hashes and `Dict` keys actually work. This is required, not optional: Base's
+   generic `hash(::AbstractArray)` hashes elements, an element of a `RandomDraw` is
+   another `RandomDraw`, and for `N == 0` that is itself — so `hash` throws
+   `StackOverflowError` on any `RandomDraw` without this method. A pre-existing latent
+   bug, surfaced by adding `isequal`.
+6. The `RandomDraw` docstring gains an explicit "Deviations from the `AbstractArray`
    contract" section covering the `eltype` mismatch and the comparison operators.
 
 ## Decision 2 — store parameter names on the value

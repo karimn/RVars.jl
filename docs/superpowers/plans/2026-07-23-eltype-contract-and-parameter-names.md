@@ -988,4 +988,12 @@ Spec coverage check — every spec requirement maps to a task:
 
 One addition beyond the spec, made during planning: Task 4's `AbstractVector{Bool}` method. It is not in the spec but is **required for correctness** — `Bool <: Integer` means the new integer-vector method would otherwise silently capture logical indexing and misread `[true, false, true]` as positions. This was verified experimentally, not assumed.
 
-One deliberate omission: no custom `Base.hash`. The spec claims `isequal` makes `RandomDraw` usable as a `Dict` key, which requires `isequal` to imply equal hashes. Base's content-based `hash(::AbstractArray)` already satisfies that (the new `isequal` is strictly stronger than content equality), and it was checked not to recurse infinitely on a scalar RV despite `x[1]` of an `N=0` value returning another `N=0` value.
+**Correction, made during Task 2 execution.** An earlier draft of this plan recorded "no custom `Base.hash`" as a deliberate omission, on the claim that Base's content-based `hash(::AbstractArray)` was already adequate and had been checked not to recurse. That check was invalid — it ran `hash` inside an `@async` task and tested `istaskdone`, which returns `true` for a failed task as well as a completed one, so it reported success on a stack overflow.
+
+`hash` in fact throws `StackOverflowError` on **any** `RandomDraw`: Base's generic method hashes elements, an element of a `RandomDraw` is another `RandomDraw`, and for `N == 0` that is itself. Task 2 therefore also adds, in `src/abstractarray.jl` immediately after `isequal`:
+
+```julia
+Base.hash(x::RandomDraw, h::UInt) = hash(x.names, hash(x.nchains, hash(x.draws, hash(:RandomDraw, h))))
+```
+
+It hashes exactly the three fields `isequal` compares, so `isequal(x, y)` implies `hash(x) == hash(y)`. This is a scope addition beyond the original Task 2 brief, fixing a pre-existing latent bug that adding `isequal` surfaced.
