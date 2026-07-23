@@ -63,6 +63,30 @@ function Base.copy(x::RandomDraw{T, N}) where {T, N}
     RandomDraw{T, N, typeof(x.draws)}(copy(x.draws), x.nchains)
 end
 
+# `collect`, `Array` and `map` allocate `Array{eltype(x)}` up front and convert each
+# element into it. That is the one place the `eltype(x) === T` declaration cannot hold:
+# an element of a RandomDraw is a scalar RandomDraw, not a T. Materialise the scalar RVs
+# explicitly. (The similar-based fallbacks — x[2:3], vcat, reverse, sum — need no help,
+# because `similar` is overridden to return a RandomDraw.)
+function Base.collect(x::RandomDraw{T, N}) where {T, N}
+    out = [x[i] for i in eachindex(x)]
+    return reshape(out, size(x))
+end
+
+Base.Array(x::RandomDraw) = collect(x)
+
+# `map(sin, x)` and `sin.(x)` must agree, so route map through broadcast. Unlike
+# broadcast, map does not expand singleton dimensions, so check shapes first.
+Base.map(f, x::RandomDraw) = broadcast(f, x)
+
+function Base.map(f, x::RandomDraw, ys...)
+    for y in ys
+        size(y) == size(x) || throw(DimensionMismatch(
+            "map requires equal sizes, got $(size(x)) and $(size(y))"))
+    end
+    return broadcast(f, x, ys...)
+end
+
 function Base.show(io::IO, x::RandomDraw{T, N}) where {T, N}
     nd = ndraws(x)
     nc = nchains(x)

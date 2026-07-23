@@ -488,6 +488,51 @@ end
         end
     end
 
+    @testset "AbstractArray contract holes (collect/Array/map)" begin
+        d = reshape(collect(1.0:12.0), 4, 3)   # 4 draws, length-3 vector RV
+        x = RandomDraw(d)
+
+        c = collect(x)
+        @test c isa Vector
+        @test size(c) == (3,)
+        @test all(e -> e isa RandomDraw, c)
+        # collect must agree with the comprehension, element for element.
+        for j in 1:3
+            @test draws(c[j]) == d[:, j]
+        end
+
+        a = Array(x)
+        @test size(a) == (3,)
+        for j in 1:3
+            @test draws(a[j]) == d[:, j]
+        end
+
+        # An N=2 RV collects to a matrix of scalar RVs, preserving position.
+        d2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        y = RandomDraw(d2)
+        c2 = collect(y)
+        @test size(c2) == (2, 3)
+        for i in 1:2, j in 1:3
+            @test draws(c2[i, j]) == d2[:, i, j]
+        end
+
+        # map and broadcast must not disagree.
+        m = map(sin, x)
+        @test m isa RandomDraw
+        @test draws(m) ≈ sin.(d)
+        @test draws(m) ≈ draws(sin.(x))
+
+        # Multi-argument map.
+        x2 = RandomDraw(d .* 2)
+        m2 = map(+, x, x2)
+        @test m2 isa RandomDraw
+        @test draws(m2) ≈ d .+ (d .* 2)
+
+        # map requires equal sizes; it must not silently broadcast-expand.
+        z = RandomDraw(reshape(collect(1.0:8.0), 4, 2))
+        @test_throws DimensionMismatch map(+, x, z)
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4
