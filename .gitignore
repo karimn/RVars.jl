@@ -1,0 +1,4 @@
+Manifest.toml
+*.swp
+*.swo
+.DS_Store
