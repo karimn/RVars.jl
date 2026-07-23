@@ -45,6 +45,12 @@ end
         @test niterations(x) == 200
         @test ndraws(x) == 600
         @test size(x) == ()
+
+        # An explicit nchains conflicts with with_chains and is ignored with a warning.
+        x2 = @test_logs (:warn,) RandomDraw(data; with_chains=true, nchains=5)
+        @test nchains(x2) == 3
+        # No warning when nchains is left at its default.
+        @test_logs RandomDraw(data; with_chains=true)
     end
 
     @testset "as_rs" begin

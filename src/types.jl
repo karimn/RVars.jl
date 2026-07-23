@@ -1,3 +1,29 @@
+"""
+    RandomDraw{T, N, A} <: AbstractArray{T, N}
+
+A random variable represented by Monte Carlo draws (e.g. a posterior sample), in the
+spirit of R's `posterior::rvar`.
+
+A `RandomDraw{T, N}` behaves as an `N`-dimensional array of scalar random variables with
+scalar element type `T`. The draws are stored in the wrapped array `A`, which has **one
+more dimension** than the value presents:
+
+- axis 1 of `A` is the draws axis (the Monte Carlo samples), always present;
+- axes `2:N+1` are the visible shape returned by [`size`](@ref).
+
+So `N = 0` wraps a vector (a scalar RV), `N = 1` wraps a matrix (a vector RV), and so on.
+Indexing an element (`x[i]`, `x[i, j]`) returns a scalar `RandomDraw{T, 0}` holding all
+draws of that element.
+
+Multiple chains are packed into the draws axis with iterations fastest and chains slowest,
+so `ndraws == niterations * nchains`. Use [`draws(x; with_chains=true)`](@ref draws) to
+recover the `(iterations, chains, shape...)` view.
+
+Construct with [`RandomDraw`](@ref RandomDraw(::AbstractArray)), [`as_rs`](@ref),
+[`rvar_rng`](@ref), or [`from_chains`](@ref); reduce over draws with `mean`/`std`/`quantile`
+or [`E`](@ref)/[`Pr`](@ref); reduce over the element shape (per draw) with the `rs_*`
+functions.
+"""
 struct RandomDraw{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
     draws::A
     nchains::Int

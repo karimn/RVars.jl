@@ -1,7 +1,31 @@
+"""
+    ndraws(x)
+
+Total number of Monte Carlo draws backing `x`, i.e. `niterations(x) * nchains(x)`.
+"""
 ndraws(x::RandomDraw) = size(x.draws, 1)
+
+"""
+    nchains(x)
+
+Number of chains packed into the draws axis of `x`.
+"""
 nchains(x::RandomDraw) = x.nchains
+
+"""
+    niterations(x)
+
+Number of draws per chain, `ndraws(x) ÷ nchains(x)`.
+"""
 niterations(x::RandomDraw) = ndraws(x) ÷ nchains(x)
 
+"""
+    draws(x; with_chains=false)
+
+The raw draws backing `x`. With `with_chains=false` (default) this is the stored
+`(ndraws, shape...)` array. With `with_chains=true` the draws axis is split into
+`(niterations, nchains, shape...)`, iterations fastest.
+"""
 function draws(x::RandomDraw; with_chains::Bool=false)
     if with_chains
         d = x.draws
@@ -20,8 +44,22 @@ function RandomDraw(x::AbstractVector{T}) where {T}
     RandomDraw{T, 0, typeof(x)}(x, 1)
 end
 
+"""
+    RandomDraw(x::AbstractArray; nchains=1, with_chains=false)
+
+Wrap an array of draws as a random variable. `x` is `(ndraws, shape...)` and the result
+has shape `size(x)[2:end]`.
+
+Pass `nchains` to declare how many chains are packed into the draws axis (it must divide
+`ndraws`). Pass `with_chains=true` when `x` is instead `(iterations, chains, shape...)`;
+the first two axes are then flattened into the draws axis and `nchains` is taken from the
+data (an explicit `nchains` is ignored, with a warning).
+"""
 function RandomDraw(x::AbstractArray{T}; nchains::Int=1, with_chains::Bool=false) where {T}
     if with_chains
+        if nchains != 1
+            @warn "with_chains=true derives nchains from the data; ignoring nchains=$nchains"
+        end
         sz = size(x)
         length(sz) >= 2 || error("with_chains=true requires >= 2 dims (iterations, chains, ...)")
         n_iter, n_chain = sz[1], sz[2]
@@ -44,6 +82,14 @@ function RandomDraw(x::RandomDraw)
     return x
 end
 
+"""
+    as_rs(x)
+
+Lift a constant number or array `x` to a `RandomDraw` with a single draw, preserving its
+element type. Useful for combining constants with random variables in arithmetic; a
+single-draw operand is treated as chain-agnostic and broadcasts against any number of
+draws.
+"""
 function as_rs(x::AbstractArray{T}) where {T}
     sz = size(x)
     A = reshape(x, 1, sz...)
@@ -55,6 +101,13 @@ function as_rs(x::Number)
     RandomDraw{typeof(x), 0, typeof(data)}(data, 1)
 end
 
+"""
+    rvar_rng(rng_func, n, args...; ndraws=2000, kwargs...)
+
+Build a length-`n` vector random variable by drawing samples from `rng_func`. `rng_func`
+is called as `rng_func(ndraws * n, args...; kwargs...)` and must return a flat collection of
+that length (e.g. `randn`, or `k -> rand(1:6, k)`); the result's element type is preserved.
+"""
 function rvar_rng(rng_func::Function, n::Int, args...; ndraws::Int=2000, kwargs...)
     result = rng_func(ndraws * n, args...; kwargs...)
     reshaped = reshape(result, ndraws, n)

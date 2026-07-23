@@ -36,12 +36,38 @@ function Statistics.quantile(x::RandomDraw, p::Union{AbstractVector, Real})
     _summarise_by_element(x, v -> Statistics.quantile(v, p))
 end
 
+"""
+    E(x)
+
+Expectation of `x`, estimated as the mean over draws. Alias for `mean(x)`: returns a plain
+scalar/array of per-element means (one value per element of the visible shape), not a
+`RandomDraw`.
+"""
 E(x::RandomDraw) = Statistics.mean(x)
 
+"""
+    Pr(x)
+
+Probability that the boolean random variable `x` holds, estimated as the fraction of draws
+that are `true` (per element). Requires a `RandomDraw` with `Bool` draws, e.g. the result
+of a comparison like `x .> 0`.
+"""
 function Pr(x::RandomDraw{<:Any, <:Any, <:AbstractArray{Bool}})
     Statistics.mean(x)
 end
 
+"""
+    rs_mean(x), rs_sum(x), rs_sd(x), rs_var(x), rs_median(x), rs_min(x), rs_max(x)
+    rs_quantile(x, probs)
+
+Reduce-shape reductions: collapse the element (visible) shape of `x` *per draw*, keeping the
+draws axis, and return a `RandomDraw`. For example `rs_mean(x)` is the across-element mean
+for each draw — a scalar RV that still carries the full posterior. `rs_quantile` returns a
+length-`length(probs)` vector RV of per-draw quantiles.
+
+Contrast with `mean`/`std`/`quantile`/[`E`](@ref)/[`Pr`](@ref), which reduce over draws
+per element and return plain numbers/arrays.
+"""
 function rs_mean(x::RandomDraw{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
