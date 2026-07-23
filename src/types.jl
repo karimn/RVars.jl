@@ -23,12 +23,32 @@ Construct with [`RandomDraw`](@ref RandomDraw(::AbstractArray)), [`as_rs`](@ref)
 [`rvar_rng`](@ref), or [`from_chains`](@ref); reduce over draws with `mean`/`std`/`quantile`
 or [`E`](@ref)/[`Pr`](@ref); reduce over the element shape (per draw) with the `rs_*`
 functions.
+
+A vector random variable (`N == 1`) may additionally carry parameter names; see
+[`variables`](@ref) and [`from_chains`](@ref). Names are dropped by any operation that
+does not preserve elementwise identity.
+
+# Deviations from the `AbstractArray` contract
+
+`RandomDraw` subtypes `AbstractArray` to reuse Julia's indexing and `similar` plumbing,
+not to promise the full contract. Two deliberate deviations:
+
+- `eltype(x) === T`, but `x[i]` returns a `RandomDraw{T, 0}` — every element is itself a
+  random variable. `collect`, `Array` and `map` have explicit methods because of this;
+  everything routed through `similar` works unchanged. Use [`draws`](@ref) for the raw
+  `(ndraws, shape...)` store.
+- `==`, `<`, `<=`, `>`, `>=` compare draw-by-draw and return a `RandomDraw{Bool}`, not a
+  `Bool` (matching R's `rvar`). Use `isequal` for a `Bool`-returning identity test, which
+  is what `Dict` and `in` need.
 """
 struct RandomDraw{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
     draws::A
     nchains::Int
+    names::Union{Nothing, Vector{Symbol}}
 
-    function RandomDraw{T, N, A}(draws::A, nchains::Int=1) where {T, N, A <: AbstractArray{T}}
+    function RandomDraw{T, N, A}(draws::A, nchains::Int=1,
+                                 names::Union{Nothing, AbstractVector{Symbol}}=nothing
+                                 ) where {T, N, A <: AbstractArray{T}}
         nchains >= 1 || error("nchains must be >= 1")
         nd = size(draws, 1)
         if nd % nchains != 0
@@ -39,7 +59,14 @@ struct RandomDraw{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
         if actual_dims != expected_dims
             error("Expected draws array with $expected_dims dimensions (draws × shape), got $actual_dims")
         end
-        new{T, N, A}(draws, nchains)
+        if names !== nothing
+            # Names label the elements of a single logical axis. N == 0 has no elements to
+            # label; N >= 2 would need one name vector per axis, a different feature.
+            N == 1 || error("Parameter names are only supported for vector random variables (N == 1), got N == $N")
+            length(names) == size(draws, 2) ||
+                error("Got $(length(names)) names for a length-$(size(draws, 2)) random variable")
+        end
+        new{T, N, A}(draws, nchains, names === nothing ? nothing : collect(Symbol, names))
     end
 end
 

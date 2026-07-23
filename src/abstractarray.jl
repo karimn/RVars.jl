@@ -87,6 +87,17 @@ function Base.map(f, x::RandomDraw, ys...)
     return broadcast(f, x, ys...)
 end
 
+# `==` is elementwise by design (src/arithmetic.jl), so it cannot answer "are these the
+# same random variable?". `isequal` does, and is what Dict and `in` dispatch on.
+function Base.isequal(x::RandomDraw, y::RandomDraw)
+    return isequal(x.draws, y.draws) && x.nchains == y.nchains && isequal(x.names, y.names)
+end
+
+# Base's hash(::AbstractArray) hashes elements, and an element of a RandomDraw is
+# another RandomDraw — for N == 0 that is itself, so the generic method recurses until
+# the stack overflows. Hash the fields directly, matching what isequal compares.
+Base.hash(x::RandomDraw, h::UInt) = hash(x.names, hash(x.nchains, hash(x.draws, hash(:RandomDraw, h))))
+
 function Base.show(io::IO, x::RandomDraw{T, N}) where {T, N}
     nd = ndraws(x)
     nc = nchains(x)

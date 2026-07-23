@@ -533,6 +533,48 @@ end
         @test_throws DimensionMismatch map(+, x, z)
     end
 
+    @testset "Names field, variables accessor, isequal" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+
+        # Default: no names, and existing 2-argument construction still works.
+        x = RandomDraw(d)
+        @test variables(x) === nothing
+        @test RandomDraw{Float64, 1, typeof(d)}(d, 1) isa RandomDraw
+
+        # Names attach via the inner constructor's third positional argument.
+        named = RandomDraw{Float64, 1, typeof(d)}(d, 1, [:a, :b, :c])
+        @test variables(named) == [:a, :b, :c]
+        @test draws(named) == d
+        @test nchains(named) == 1
+
+        # Wrong number of names is rejected.
+        @test_throws ErrorException RandomDraw{Float64, 1, typeof(d)}(d, 1, [:a, :b])
+
+        # Names are only valid for N == 1.
+        d0 = collect(1.0:4.0)
+        @test_throws ErrorException RandomDraw{Float64, 0, typeof(d0)}(d0, 1, [:a])
+        d2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        @test_throws ErrorException RandomDraw{Float64, 2, typeof(d2)}(d2, 1, [:a, :b])
+
+        # isequal returns a genuine Bool, unlike == which is elementwise by design.
+        @test isequal(x, RandomDraw(d)) === true
+        @test (x == RandomDraw(d)) isa RandomDraw
+        @test isequal(x, named) === false                       # names differ
+        @test isequal(x, RandomDraw(d, nchains=2)) === false     # nchains differ
+        @test isequal(x, RandomDraw(d .+ 1)) === false           # draws differ
+
+        # Base's AbstractArray hash recurses forever on a scalar RV (x[1] of an N=0
+        # value is another N=0 value), so RandomDraw needs its own method.
+        @test hash(x[1]) isa UInt
+        @test hash(x) == hash(RandomDraw(d))
+        @test isequal(x, RandomDraw(d)) && hash(x) == hash(RandomDraw(d))
+
+        # isequal makes RandomDraw usable as a Dict key.
+        dict = Dict(x => "unnamed", named => "named")
+        @test dict[RandomDraw(d)] == "unnamed"
+        @test length(dict) == 2
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4

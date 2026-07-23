@@ -20,6 +20,14 @@ Number of draws per chain, `ndraws(x) ÷ nchains(x)`.
 niterations(x::RandomDraw) = ndraws(x) ÷ nchains(x)
 
 """
+    variables(x)
+
+The parameter names carried by `x`, or `nothing` if it has none. Only vector random
+variables (`N == 1`) can carry names; see [`from_chains`](@ref).
+"""
+variables(x::RandomDraw) = x.names
+
+"""
     draws(x; with_chains=false)
 
 The raw draws backing `x`. With `with_chains=false` (default) this is the stored
