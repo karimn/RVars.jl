@@ -2,12 +2,16 @@ Base.IndexStyle(::Type{<:RandomDraw}) = IndexLinear()
 
 function Base.getindex(x::RandomDraw{T, N}, i::Int) where {T, N}
     d = x.draws
-    n_draws = size(d, 1)
     total = length(x)
     if i < 1 || i > total
         throw(BoundsError(x, i))
     end
-    data = d[:, i]
+    if N == 0
+        return RandomDraw{T, 0, typeof(d)}(d, x.nchains)
+    end
+    rest_shape = size(d)[2:end]
+    ci = CartesianIndices(rest_shape)
+    data = d[:, ci[i]]
     RandomDraw{T, 0, typeof(data)}(data, x.nchains)
 end
 
