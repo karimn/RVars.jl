@@ -139,3 +139,31 @@ function _combine_nchains(operands...)
     end
     return nc == 0 ? 1 : nc
 end
+
+# Combine parameter names across operands of an elementwise/broadcast operation, with the
+# same rule as _combine_nchains: a single-draw operand is a constant with no identity of
+# its own and defers; two genuine but differing name sets cannot be reconciled, so the
+# result is unnamed.
+function _combine_names(operands...)
+    nms = nothing
+    seen = false
+    for x in operands
+        x isa RandomDraw || continue
+        size(x.draws, 1) == 1 && continue  # constant: name-agnostic
+        if !seen
+            nms = x.names
+            seen = true
+        elseif !isequal(nms, x.names)
+            nms = nothing
+        end
+    end
+    return nms
+end
+
+# Attach `nms` to `x` only where it still describes the result elementwise. Broadcasting
+# can change both rank and length (a named length-3 vector RV times a 3x2 matrix RV gives
+# an N=2 result), and stale names are worse than none.
+function _maybe_names(x::RandomDraw{T, N}, nms) where {T, N}
+    (nms === nothing || N != 1 || length(nms) != length(x)) && return x
+    return RandomDraw{T, N, typeof(x.draws)}(x.draws, x.nchains, nms)
+end

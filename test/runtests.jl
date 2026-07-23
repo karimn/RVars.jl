@@ -655,6 +655,54 @@ end
         @test nchains(xc[:b]) == 2
     end
 
+    @testset "Name propagation" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+        x = RandomDraw(d; names=[:a, :b, :c])
+        y = RandomDraw(d .* 2; names=[:a, :b, :c])
+        z = RandomDraw(d .* 3; names=[:p, :q, :r])
+        u = RandomDraw(d .* 4)                       # multi-draw, unnamed
+        k = as_rs([10.0, 20.0, 30.0])                # single-draw constant, unnamed
+
+        # Preserved: elementwise ops against a scalar.
+        @test variables(x .+ 1) == [:a, :b, :c]
+        @test variables(x .* 2) == [:a, :b, :c]
+        @test variables(2 .- x) == [:a, :b, :c]
+        @test variables(sin(x)) == [:a, :b, :c]
+        @test variables(-x) == [:a, :b, :c]
+        @test variables(sin.(x)) == [:a, :b, :c]
+        @test variables(x .* 2 .+ 1) == [:a, :b, :c]   # fused broadcast
+
+        # Preserved: two operands whose names agree.
+        @test variables(x .+ y) == [:a, :b, :c]
+        @test variables(x + y) == [:a, :b, :c]
+
+        # Preserved: the other operand is a single-draw constant, so name-agnostic.
+        @test variables(x .+ k) == [:a, :b, :c]
+
+        # Dropped: names disagree, or the other operand is multi-draw and unnamed.
+        @test variables(x .+ z) === nothing
+        @test variables(x .+ u) === nothing
+
+        # Values must be untouched by any of this.
+        @test draws(x .+ y) ≈ d .+ (d .* 2)
+        @test draws(x .+ z) ≈ d .+ (d .* 3)
+
+        # copy preserves; similar and reshape drop.
+        @test variables(copy(x)) == [:a, :b, :c]
+        @test variables(similar(x)) === nothing
+        @test variables(reshape(x, (3,))) === nothing
+
+        # Shape-collapsing operations drop names.
+        @test variables(rs_mean(x)) === nothing
+        A = RandomDraw(randn(4, 2, 3))
+        @test variables(A * x) === nothing
+
+        # nchains bookkeeping is unaffected by the names plumbing.
+        xc = RandomDraw(d; nchains=2, names=[:a, :b, :c])
+        @test nchains(xc .+ 1) == 2
+        @test variables(xc .+ 1) == [:a, :b, :c]
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4

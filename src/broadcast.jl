@@ -45,7 +45,7 @@ function Base.similar(bc::Base.Broadcast.Broadcasted{RandomDrawStyle{N}}, ::Type
     nc = _combine_nchains(bcf.args...)
     sz = (n_draws, length.(axs)...)
     data = similar(src_draws, T, sz)
-    RandomDraw{T, N, typeof(data)}(data, nc)
+    return _maybe_names(RandomDraw{T, N, typeof(data)}(data, nc), _combine_names(bcf.args...))
 end
 
 function Base.copy(bc::Base.Broadcast.Broadcasted{RandomDrawStyle{N}}) where {N}

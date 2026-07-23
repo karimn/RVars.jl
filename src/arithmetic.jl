@@ -1,13 +1,13 @@
 function _binop_scalar(f::Function, x::RandomDraw, y::Number)
     d = draws(x)
     result = f.(d, y)
-    RandomDraw(result, nchains=nchains(x))
+    _maybe_names(RandomDraw(result, nchains=nchains(x)), x.names)
 end
 
 function _binop_scalar(f::Function, x::Number, y::RandomDraw)
     d = draws(y)
     result = f.(x, d)
-    RandomDraw(result, nchains=nchains(y))
+    _maybe_names(RandomDraw(result, nchains=nchains(y)), y.names)
 end
 
 function _binop_rv(f::Function, x::RandomDraw, y::RandomDraw)
@@ -27,7 +27,7 @@ function _binop_rv(f::Function, x::RandomDraw, y::RandomDraw)
         end
     end
     result = f.(dx, dy)
-    RandomDraw(result, nchains=_combine_nchains(x, y))
+    _maybe_names(RandomDraw(result, nchains=_combine_nchains(x, y)), _combine_names(x, y))
 end
 
 Base.:+(x::RandomDraw, y::RandomDraw) = _binop_rv(+, x, y)
@@ -86,15 +86,16 @@ Base.:>=(x::RandomDraw, y::RandomDraw) = _binop_rv(>=, x, y)
 Base.:>=(x::RandomDraw, y::Number) = _binop_scalar(>=, x, y)
 Base.:>=(x::Number, y::RandomDraw) = _binop_scalar(>=, x, y)
 
-Base.:!(x::RandomDraw) = RandomDraw(.!(draws(x)), nchains=nchains(x))
-Base.:-(x::RandomDraw) = RandomDraw(-(draws(x)), nchains=nchains(x))
+Base.:!(x::RandomDraw) = _maybe_names(RandomDraw(.!(draws(x)), nchains=nchains(x)), x.names)
+Base.:-(x::RandomDraw) = _maybe_names(RandomDraw(-(draws(x)), nchains=nchains(x)), x.names)
 
 for f in [:sin, :cos, :tan, :asin, :acos, :atan, :sinh, :cosh, :tanh,
           :asinh, :acosh, :atanh,
           :exp, :log, :log2, :log10, :log1p, :sqrt,
           :abs, :sign, :floor, :ceil, :trunc, :round]
     @eval begin
-        Base.$f(x::RandomDraw) = RandomDraw($f.(draws(x)), nchains=nchains(x))
+        Base.$f(x::RandomDraw) =
+            _maybe_names(RandomDraw($f.(draws(x)), nchains=nchains(x)), x.names)
     end
 end
 

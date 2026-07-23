@@ -96,7 +96,7 @@ function Base.similar(x::RandomDraw{T, N}, ::Type{S}, dims::Dims) where {T, N, S
 end
 
 function Base.copy(x::RandomDraw{T, N}) where {T, N}
-    RandomDraw{T, N, typeof(x.draws)}(copy(x.draws), x.nchains)
+    RandomDraw{T, N, typeof(x.draws)}(copy(x.draws), x.nchains, x.names)
 end
 
 # `collect`, `Array` and `map` allocate `Array{eltype(x)}` up front and convert each
