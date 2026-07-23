@@ -36,10 +36,12 @@ not to promise the full contract. Two deliberate deviations:
 - `eltype(x) === T`, but `x[i]` returns a `RandomDraw{T, 0}` — every element is itself a
   random variable. `collect`, `Array` and `map` have explicit methods because of this;
   everything routed through `similar` works unchanged. Use [`draws`](@ref) for the raw
-  `(ndraws, shape...)` store.
+  `(ndraws, shape...)` store. The *typed* materialization forms are not among these —
+  `collect(Float64, x)`, `convert(Array{Float64}, x)` and `Array{Float64}(x)` still throw
+  `MethodError`.
 - `==`, `<`, `<=`, `>`, `>=` compare draw-by-draw and return a `RandomDraw{Bool}`, not a
   `Bool` (matching R's `rvar`). Use `isequal` for a `Bool`-returning identity test, which
-  is what `Dict` and `in` need.
+  is what `Dict` and `Set` need.
 """
 struct RandomDraw{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
     draws::A
@@ -141,15 +143,25 @@ function _combine_nchains(operands...)
 end
 
 # Combine parameter names across operands of an elementwise/broadcast operation, with the
-# same rule as _combine_nchains: a single-draw operand is a constant with no identity of
-# its own and defers; two genuine but differing name sets cannot be reconciled, so the
-# result is unnamed.
+# same rule as _combine_nchains: a single-draw operand is a constant whose names are
+# weaker evidence, used only when no multi-draw operand supplies any; two genuine but
+# differing name sets cannot be reconciled, so the result is unnamed.
 function _combine_names(operands...)
     nms = nothing
     seen = false
+    const_nms = nothing
+    const_seen = false
     for x in operands
         x isa RandomDraw || continue
-        size(x.draws, 1) == 1 && continue  # constant: name-agnostic
+        if size(x.draws, 1) == 1
+            if !const_seen
+                const_nms = x.names
+                const_seen = true
+            elseif !isequal(const_nms, x.names)
+                const_nms = nothing
+            end
+            continue
+        end
         if !seen
             nms = x.names
             seen = true
@@ -157,7 +169,7 @@ function _combine_names(operands...)
             nms = nothing
         end
     end
-    return nms
+    return seen ? nms : const_nms
 end
 
 # Attach `nms` to `x` only where it still describes the result elementwise. Broadcasting

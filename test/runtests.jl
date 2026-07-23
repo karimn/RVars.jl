@@ -573,6 +573,10 @@ end
         dict = Dict(x => "unnamed", named => "named")
         @test dict[RandomDraw(d)] == "unnamed"
         @test length(dict) == 2
+
+        # isequal is total: comparing against a plain array returns false, never throws.
+        @test isequal(x, [1.0, 2.0, 3.0]) === false
+        @test isequal([1.0, 2.0, 3.0], x) === false
     end
 
     @testset "Attaching names" begin
@@ -639,7 +643,7 @@ end
         # Unknown names error, and the message lists what is available.
         err = try; x[:zzz]; catch e; sprint(showerror, e); end
         @test occursin("zzz", err)
-        @test occursin("a", err) && occursin("b", err) && occursin("c", err)
+        @test occursin("available: a, b, c", err)
 
         # Name indexing on an unnamed RV errors rather than returning nonsense.
         u = RandomDraw(d)
@@ -696,11 +700,30 @@ end
         @test variables(rs_mean(x)) === nothing
         A = RandomDraw(randn(4, 2, 3))
         @test variables(A * x) === nothing
+        @test variables(vcat(x, x)) === nothing
+
+        # _maybe_names must refuse to attach names whose length no longer matches the
+        # broadcast result.
+        one_named = RandomDraw(randn(4, 1); names=[:only])
+        widened = one_named .+ as_rs([1.0, 2.0, 3.0])
+        @test size(widened) == (3,)
+        @test variables(widened) === nothing
 
         # nchains bookkeeping is unaffected by the names plumbing.
         xc = RandomDraw(d; nchains=2, names=[:a, :b, :c])
         @test nchains(xc .+ 1) == 2
         @test variables(xc .+ 1) == [:a, :b, :c]
+
+        # A named single-draw constant keeps its names when no multi-draw operand supplies
+        # any, so `+` and `.+` agree.
+        sd = RandomDraw(reshape([1.0, 2.0, 3.0], 1, 3); names=[:a, :b, :c])
+        @test variables(sd + 1) == [:a, :b, :c]
+        @test variables(sd .+ 1) == [:a, :b, :c]
+        @test variables(sin(sd)) == [:a, :b, :c]
+        @test variables(sin.(sd)) == [:a, :b, :c]
+        # A multi-draw operand still wins over a differently-named constant.
+        d3 = reshape(collect(1.0:12.0), 4, 3)
+        @test variables(RandomDraw(d3; names=[:p, :q, :r]) .+ sd) == [:p, :q, :r]
     end
 
     @testset "show with names" begin
@@ -715,6 +738,11 @@ end
         plain = sprint(show, RandomDraw(d))
         @test occursin("[1]", plain)
         @test !occursin("[alpha]", plain)
+
+        # The REPL path (MIME"text/plain") must show the same summary, not Base's
+        # element-by-element array rendering.
+        @test occursin("[alpha]", sprint(show, MIME"text/plain"(), named))
+        @test occursin("±", sprint(show, MIME"text/plain"(), named))
     end
 
     if HAS_MCMCCHAINS

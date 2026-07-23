@@ -53,7 +53,7 @@ function RandomDraw(x::AbstractVector{T}) where {T}
 end
 
 """
-    RandomDraw(x::AbstractArray; nchains=1, with_chains=false)
+    RandomDraw(x::AbstractArray; nchains=1, with_chains=false, names=nothing)
 
 Wrap an array of draws as a random variable. `x` is `(ndraws, shape...)` and the result
 has shape `size(x)[2:end]`.

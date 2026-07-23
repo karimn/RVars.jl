@@ -124,10 +124,16 @@ function Base.map(f, x::RandomDraw, ys...)
 end
 
 # `==` is elementwise by design (src/arithmetic.jl), so it cannot answer "are these the
-# same random variable?". `isequal` does, and is what Dict and `in` dispatch on.
+# same random variable?". `isequal` does, and is what Dict and Set dispatch on.
 function Base.isequal(x::RandomDraw, y::RandomDraw)
     return isequal(x.draws, y.draws) && x.nchains == y.nchains && isequal(x.names, y.names)
 end
+
+# isequal must be total and Bool-returning. Without these, comparing against a plain array
+# falls through to Base's AbstractArray method, which compares elements with `==` — and
+# `==` on a RandomDraw returns a RandomDraw{Bool}, not a Bool.
+Base.isequal(::RandomDraw, ::AbstractArray) = false
+Base.isequal(::AbstractArray, ::RandomDraw) = false
 
 # Base's hash(::AbstractArray) hashes elements, and an element of a RandomDraw is
 # another RandomDraw — for N == 0 that is itself, so the generic method recurses until
@@ -171,3 +177,7 @@ function Base.show(io::IO, x::RandomDraw{T, N}) where {T, N}
         end
     end
 end
+
+# RandomDraw <: AbstractArray, so the REPL's display() would otherwise route through Base's
+# array rendering and print the summary once per element. Send it to the two-arg method.
+Base.show(io::IO, ::MIME"text/plain", x::RandomDraw) = show(io, x)
