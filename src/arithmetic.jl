@@ -27,8 +27,7 @@ function _binop_rv(f::Function, x::RandomDraw, y::RandomDraw)
         end
     end
     result = f.(dx, dy)
-    nc = nchains(x) == nchains(y) ? nchains(x) : 1
-    RandomDraw(result, nchains=nc)
+    RandomDraw(result, nchains=_combine_nchains(x, y))
 end
 
 Base.:+(x::RandomDraw, y::RandomDraw) = _binop_rv(+, x, y)

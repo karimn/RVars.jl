@@ -206,6 +206,32 @@ end
         @test y isa RandomDraw{Float64}
     end
 
+    @testset "nchains propagation (H5/H6/M6)" begin
+        x = RandomDraw(randn(800, 3), nchains=4)
+        @test nchains(x) == 4
+
+        # H5: combining with a constant (1-draw) operand must not collapse nchains.
+        c = as_rs(2.0)
+        @test nchains(x + c) == 4
+        @test nchains(c + x) == 4
+        @test nchains(x .+ c) == 4
+        @test nchains(x * 2.0) == 4
+        @test nchains(2.0 + x) == 4
+        @test nchains(sin(x)) == 4
+
+        # Two genuinely different chain counts cannot align -> collapse to 1.
+        y = RandomDraw(randn(800, 3), nchains=2)
+        @test nchains(x + y) == 1
+
+        # H6: nchains kwarg must be honored for flat-vector input.
+        v = RandomDraw(collect(1.0:800.0); nchains=4)
+        @test nchains(v) == 4
+        @test niterations(v) == 200
+
+        # M6: a single-draw object cannot claim multiple chains.
+        @test_throws ErrorException RandomDraw(randn(1, 3); nchains=2)
+    end
+
     @testset "Indexing value correctness (C2/H1/H2)" begin
         nd = 5
         # store[k, i, j] distinguishable per (draw, row, col); visible shape (2, 3).

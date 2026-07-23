@@ -5,7 +5,7 @@ struct RandomDraw{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
     function RandomDraw{T, N, A}(draws::A, nchains::Int=1) where {T, N, A <: AbstractArray{T}}
         nchains >= 1 || error("nchains must be >= 1")
         nd = size(draws, 1)
-        if nd != 1 && nd % nchains != 0
+        if nd % nchains != 0
             error("Number of chains ($nchains) does not divide number of draws ($nd)")
         end
         expected_dims = N + 1

@@ -5,7 +5,7 @@ function _prep_matmul(x::RandomDraw, y::RandomDraw)
     if nx != ny && nx != 1 && ny != 1
         error("Incompatible number of draws: $nx vs $ny")
     end
-    nc = ifelse(nchains(x) == nchains(y), nchains(x), 1)
+    nc = _combine_nchains(x, y)
     dx = nx == ny ? draws(x) : _broadcast_draws(x, max(nx, ny))
     dy = nx == ny ? draws(y) : _broadcast_draws(y, max(nx, ny))
     dx, dy, nc
