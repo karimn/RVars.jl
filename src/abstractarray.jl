@@ -27,6 +27,42 @@ function Base.getindex(x::RandomDraw{T, N}, idx::AbstractArray{Bool}) where {T, 
     RandomDraw{eltype(result_draws), 1, typeof(result_draws)}(result_draws, x.nchains)
 end
 
+# Subsetting a vector RV. The generic AbstractArray fallback would route through
+# `similar`, which receives only a type and a shape and so cannot carry the names;
+# slicing the flat store directly both preserves them and skips the fallback's
+# element-by-element loop.
+function Base.getindex(x::RandomDraw{T, 1}, I::AbstractVector{<:Integer}) where {T}
+    @boundscheck checkbounds(x, I)
+    data = _flat_store(x)[:, I]
+    nms = x.names === nothing ? nothing : x.names[I]
+    RandomDraw{T, 1, typeof(data)}(data, x.nchains, nms)
+end
+
+Base.getindex(x::RandomDraw{T, 1}, ::Colon) where {T} = x[1:length(x)]
+
+# Bool <: Integer, so without this method a logical index would silently dispatch to the
+# integer method above and be read as positions 1 and 0. Julia reports no ambiguity here.
+function Base.getindex(x::RandomDraw{T, 1}, idx::AbstractVector{Bool}) where {T}
+    length(idx) == length(x) ||
+        throw(DimensionMismatch("logical index length $(length(idx)) != length $(length(x))"))
+    return x[findall(idx)]
+end
+
+function _name_index(x::RandomDraw, s::Symbol)
+    nms = x.names
+    nms === nothing && error("This RandomDraw has no parameter names")
+    i = findfirst(isequal(s), nms)
+    i === nothing &&
+        error("Unknown parameter name :$s; available: $(join(string.(nms), ", "))")
+    return i
+end
+
+Base.getindex(x::RandomDraw{T, 1}, s::Symbol) where {T} = x[_name_index(x, s)]
+
+function Base.getindex(x::RandomDraw{T, 1}, S::AbstractVector{Symbol}) where {T}
+    return x[[_name_index(x, s) for s in S]]
+end
+
 function Base.setindex!(x::RandomDraw{T, N}, val::Number, i::Int) where {T, N}
     @boundscheck checkbounds(x, i)
     _flat_store(x)[:, i] .= val

@@ -609,6 +609,52 @@ end
         @test_throws ErrorException RandomDraw(d2; names=[:a, :b])
     end
 
+    @testset "Name-based and names-preserving indexing" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+        x = RandomDraw(d; names=[:a, :b, :c])
+
+        # Indexing by name gives the scalar RV for that parameter.
+        @test draws(x[:b]) == d[:, 2]
+        @test x[:b] isa RandomDraw{Float64, 0}
+        @test variables(x[:b]) === nothing        # a scalar RV has no elements to name
+
+        # A vector of names selects and reorders, carrying the names along.
+        sub = x[[:c, :a]]
+        @test variables(sub) == [:c, :a]
+        @test draws(sub) == d[:, [3, 1]]
+
+        # Integer-vector and range indexing subset the names.
+        @test variables(x[2:3]) == [:b, :c]
+        @test draws(x[2:3]) == d[:, 2:3]
+        @test variables(x[[1, 3]]) == [:a, :c]
+
+        # x[:] keeps every name rather than silently dropping them.
+        @test variables(x[:]) == [:a, :b, :c]
+        @test draws(x[:]) == d
+
+        # Logical indexing still works and also subsets names.
+        @test variables(x[[true, false, true]]) == [:a, :c]
+        @test draws(x[[true, false, true]]) == d[:, [1, 3]]
+
+        # Unknown names error, and the message lists what is available.
+        err = try; x[:zzz]; catch e; sprint(showerror, e); end
+        @test occursin("zzz", err)
+        @test occursin("a", err) && occursin("b", err) && occursin("c", err)
+
+        # Name indexing on an unnamed RV errors rather than returning nonsense.
+        u = RandomDraw(d)
+        @test_throws ErrorException u[:a]
+
+        # Subsetting an unnamed RV still works and stays unnamed.
+        @test variables(u[2:3]) === nothing
+        @test draws(u[2:3]) == d[:, 2:3]
+
+        # nchains survives subsetting.
+        xc = RandomDraw(d; nchains=2, names=[:a, :b, :c])
+        @test nchains(xc[2:3]) == 2
+        @test nchains(xc[:b]) == 2
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4
