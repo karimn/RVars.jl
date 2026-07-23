@@ -15,6 +15,10 @@ MCMCChains = "c7f686f2-ff18-58e9-bc7b-3106c5c0d1b0"
 RandomDrawsMCMCChainsExt = "MCMCChains"
 
 [compat]
+LinearAlgebra = "1"
+MCMCChains = "6, 7"
+Random = "1"
+Statistics = "1"
 julia = "1.9"
 
 [extras]
