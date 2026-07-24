@@ -1,8 +1,8 @@
-# RandomDraws.jl
+# RVars.jl
 
 [![CI](https://github.com/karimn/RandomDraws.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/karimn/RandomDraws.jl/actions/workflows/CI.yml)
 
-Julia package for **sample-based random variables** — similar to R's `rvar` from the [`posterior`](https://mc-stan.org/posterior/) package. A `RandomDraw` wraps a Monte Carlo sample (draws) behind an `AbstractArray` interface, letting you work with random quantities using normal array syntax.
+Julia package for **sample-based random variables** — similar to R's `rvar` from the [`posterior`](https://mc-stan.org/posterior/) package. A `RVar` wraps a Monte Carlo sample (draws) behind an `AbstractArray` interface, letting you work with random quantities using normal array syntax.
 
 ## Installation
 
@@ -14,15 +14,15 @@ julia> using Pkg; Pkg.add(url="https://github.com/karimn/RandomDraws.jl")
 ## Quick Start
 
 ```julia
-using RandomDraws, Statistics
+using RVars, Statistics
 
 # Create a scalar random variable from 1000 draws
-x = RandomDraw(randn(1000))
+x = RVar(randn(1000))
 mean(x)        # 0.02 (scalar)
 std(x)         # 1.01 (scalar)
 
 # Create a vector random variable (3 elements, 1000 draws each)
-y = RandomDraw(randn(1000, 3))
+y = RVar(randn(1000, 3))
 mean(y)        # 3-element vector
 size(y)        # (3,)
 
@@ -37,24 +37,24 @@ Pr(gt)         # P(y > 0) for each element
 
 # Summary statistics
 E(x)           # same as mean(x)
-rs_mean(y)     # returns RandomDraw (mean collapsed across draws)
-rs_sd(y)       # returns RandomDraw
+rs_mean(y)     # returns RVar (mean collapsed across draws)
+rs_sd(y)       # returns RVar
 ```
 
 ## Constructors
 
 | Input shape | Result | Draws dim |
 |---|---|---|
-| `Vector` `(n_draws,)` | Scalar `RandomDraw{T,0}` | `1` |
-| `Matrix` `(n_draws, n)` | Vector `RandomDraw{T,1}` of length `n` | `1` |
-| `Array{T,3}` `(n_draws, m, n)` | Matrix `RandomDraw{T,2}` of size `(m,n)` | `1` |
+| `Vector` `(n_draws,)` | Scalar `RVar{T,0}` | `1` |
+| `Matrix` `(n_draws, n)` | Vector `RVar{T,1}` of length `n` | `1` |
+| `Array{T,3}` `(n_draws, m, n)` | Matrix `RVar{T,2}` of size `(m,n)` | `1` |
 
 ### With chains
 
 ```julia
 # 200 iterations × 3 chains × 5 variables
 data = randn(200, 5, 3)
-rd = RandomDraw(data; with_chains=true)
+rd = RVar(data; with_chains=true)
 nchains(rd)    # 3
 niterations(rd) # 200
 ndraws(rd)     # 600
@@ -77,22 +77,22 @@ rvar_rng(randn, 3; ndraws=10000)  # custom draws
 
 ## Broadcasting
 
-All broadcast operations preserve the `RandomDraw` type:
+All broadcast operations preserve the `RVar` type:
 
 ```julia
-x = RandomDraw(randn(1000, 3))
-x .+ 1.0          # RandomDraw
-x .> 0            # RandomDraw{Bool}
-x .+ [1, 2, 3]    # RandomDraw (vector RS + plain array)
+x = RVar(randn(1000, 3))
+x .+ 1.0          # RVar
+x .> 0            # RVar{Bool}
+x .+ [1, 2, 3]    # RVar (vector RS + plain array)
 ```
 
 ## MCMCChains Integration
 
 ```julia
-using RandomDraws, MCMCChains
+using RVars, MCMCChains
 
 chn = Chains(rand(200, 4, 5), [:a, :b, :c, :d, :e])
-rd = RandomDraw(chn)
+rd = RVar(chn)
 # or equivalently:
 from_chains(Array(chn))  # works without MCMCChains loaded
 ```
@@ -111,14 +111,14 @@ from_chains(Array(chn))  # works without MCMCChains loaded
 
 - `mean`, `std`, `var`, `median`, `minimum`, `maximum`, `quantile`
 
-### Summary as `RandomDraw` (returns `RandomDraw`)
+### Summary as `RVar` (returns `RVar`)
 
 - `rs_mean`, `rs_sum`, `rs_sd`, `rs_var`, `rs_median`, `rs_min`, `rs_max`, `rs_quantile`
 
 ### Probability
 
 - `E(x)` — alias for `mean(x)`
-- `Pr(x)` — `mean(x)` for `RandomDraw{Bool}`
+- `Pr(x)` — `mean(x)` for `RVar{Bool}`
 
 ## Status
 

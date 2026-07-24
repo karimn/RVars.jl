@@ -1,4 +1,4 @@
-function _summarise_by_element(x::RandomDraw, f::Function)
+function _summarise_by_element(x::RVar, f::Function)
     d = draws(x)
     n_draws = size(d, 1)
     nd = ndims(d)
@@ -18,21 +18,21 @@ function _summarise_by_element(x::RandomDraw, f::Function)
     return reshape(result, L, rest_shape...)
 end
 
-Statistics.mean(x::RandomDraw) = _summarise_by_element(x, Statistics.mean)
+Statistics.mean(x::RVar) = _summarise_by_element(x, Statistics.mean)
 
-function Statistics.std(x::RandomDraw; corrected::Bool=true)
+function Statistics.std(x::RVar; corrected::Bool=true)
     _summarise_by_element(x, v -> Statistics.std(v; corrected=corrected))
 end
 
-function Statistics.var(x::RandomDraw; corrected::Bool=true)
+function Statistics.var(x::RVar; corrected::Bool=true)
     _summarise_by_element(x, v -> Statistics.var(v; corrected=corrected))
 end
 
-Statistics.median(x::RandomDraw) = _summarise_by_element(x, Statistics.median)
-Base.minimum(x::RandomDraw) = _summarise_by_element(x, Base.minimum)
-Base.maximum(x::RandomDraw) = _summarise_by_element(x, Base.maximum)
+Statistics.median(x::RVar) = _summarise_by_element(x, Statistics.median)
+Base.minimum(x::RVar) = _summarise_by_element(x, Base.minimum)
+Base.maximum(x::RVar) = _summarise_by_element(x, Base.maximum)
 
-function Statistics.quantile(x::RandomDraw, p::Union{AbstractVector, Real})
+function Statistics.quantile(x::RVar, p::Union{AbstractVector, Real})
     _summarise_by_element(x, v -> Statistics.quantile(v, p))
 end
 
@@ -41,18 +41,18 @@ end
 
 Expectation of `x`, estimated as the mean over draws. Alias for `mean(x)`: returns a plain
 scalar/array of per-element means (one value per element of the visible shape), not a
-`RandomDraw`.
+`RVar`.
 """
-E(x::RandomDraw) = Statistics.mean(x)
+E(x::RVar) = Statistics.mean(x)
 
 """
     Pr(x)
 
 Probability that the boolean random variable `x` holds, estimated as the fraction of draws
-that are `true` (per element). Requires a `RandomDraw` with `Bool` draws, e.g. the result
+that are `true` (per element). Requires a `RVar` with `Bool` draws, e.g. the result
 of a comparison like `x .> 0`.
 """
-function Pr(x::RandomDraw{<:Any, <:Any, <:AbstractArray{Bool}})
+function Pr(x::RVar{<:Any, <:Any, <:AbstractArray{Bool}})
     Statistics.mean(x)
 end
 
@@ -61,70 +61,70 @@ end
     rs_quantile(x, probs)
 
 Reduce-shape reductions: collapse the element (visible) shape of `x` *per draw*, keeping the
-draws axis, and return a `RandomDraw`. For example `rs_mean(x)` is the across-element mean
+draws axis, and return a `RVar`. For example `rs_mean(x)` is the across-element mean
 for each draw — a scalar RV that still carries the full posterior. `rs_quantile` returns a
 length-`length(probs)` vector RV of per-draw quantiles.
 
 Contrast with `mean`/`std`/`quantile`/[`E`](@ref)/[`Pr`](@ref), which reduce over draws
 per element and return plain numbers/arrays.
 """
-function rs_mean(x::RandomDraw{T, N}) where {T, N}
+function rs_mean(x::RVar{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
     result = Statistics.mean(d; dims=ntuple(i -> i + 1, N))
     result = dropdims(result; dims=ntuple(i -> i + 1, N))
-    RandomDraw(reshape(result, n_draws), nchains=nchains(x))
+    RVar(reshape(result, n_draws), nchains=nchains(x))
 end
 
-function rs_sum(x::RandomDraw{T, N}) where {T, N}
+function rs_sum(x::RVar{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
     result = sum(d; dims=ntuple(i -> i + 1, N))
     result = dropdims(result; dims=ntuple(i -> i + 1, N))
-    RandomDraw(reshape(result, n_draws), nchains=nchains(x))
+    RVar(reshape(result, n_draws), nchains=nchains(x))
 end
 
-function rs_sd(x::RandomDraw{T, N}) where {T, N}
+function rs_sd(x::RVar{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
     result = Statistics.std(d; dims=ntuple(i -> i + 1, N))
     result = dropdims(result; dims=ntuple(i -> i + 1, N))
-    RandomDraw(reshape(result, n_draws), nchains=nchains(x))
+    RVar(reshape(result, n_draws), nchains=nchains(x))
 end
 
-function rs_var(x::RandomDraw{T, N}) where {T, N}
+function rs_var(x::RVar{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
     result = Statistics.var(d; dims=ntuple(i -> i + 1, N))
     result = dropdims(result; dims=ntuple(i -> i + 1, N))
-    RandomDraw(reshape(result, n_draws), nchains=nchains(x))
+    RVar(reshape(result, n_draws), nchains=nchains(x))
 end
 
-function rs_median(x::RandomDraw{T, N}) where {T, N}
+function rs_median(x::RVar{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
     result = Statistics.median(d; dims=ntuple(i -> i + 1, N))
     result = dropdims(result; dims=ntuple(i -> i + 1, N))
-    RandomDraw(reshape(result, n_draws), nchains=nchains(x))
+    RVar(reshape(result, n_draws), nchains=nchains(x))
 end
 
-function rs_min(x::RandomDraw{T, N}) where {T, N}
+function rs_min(x::RVar{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
     result = Base.minimum(d; dims=ntuple(i -> i + 1, N))
     result = dropdims(result; dims=ntuple(i -> i + 1, N))
-    RandomDraw(reshape(result, n_draws), nchains=nchains(x))
+    RVar(reshape(result, n_draws), nchains=nchains(x))
 end
 
-function rs_max(x::RandomDraw{T, N}) where {T, N}
+function rs_max(x::RVar{T, N}) where {T, N}
     d = draws(x)
     n_draws = size(d, 1)
     result = Base.maximum(d; dims=ntuple(i -> i + 1, N))
     result = dropdims(result; dims=ntuple(i -> i + 1, N))
-    RandomDraw(reshape(result, n_draws), nchains=nchains(x))
+    RVar(reshape(result, n_draws), nchains=nchains(x))
 end
 
-function rs_quantile(x::RandomDraw{T, N}, probs::AbstractVector) where {T, N}
+function rs_quantile(x::RVar{T, N}, probs::AbstractVector) where {T, N}
     # Like the other rs_ reductions: collapse the element shape per draw (here into the
     # requested quantiles), keeping the draws axis. Result is a length-(probs) vector RV.
     d = draws(x)
@@ -136,5 +136,5 @@ function rs_quantile(x::RandomDraw{T, N}, probs::AbstractVector) where {T, N}
     for i in 1:n_draws
         result[i, :] .= Statistics.quantile(view(flat, i, :), probs)
     end
-    RandomDraw{eltype(result), 1, typeof(result)}(result, nchains(x))
+    RVar{eltype(result), 1, typeof(result)}(result, nchains(x))
 end

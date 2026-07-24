@@ -1,10 +1,10 @@
 """
-    RandomDraw{T, N, A} <: AbstractArray{T, N}
+    RVar{T, N, A} <: AbstractArray{T, N}
 
 A random variable represented by Monte Carlo draws (e.g. a posterior sample), in the
 spirit of R's `posterior::rvar`.
 
-A `RandomDraw{T, N}` behaves as an `N`-dimensional array of scalar random variables with
+A `RVar{T, N}` behaves as an `N`-dimensional array of scalar random variables with
 scalar element type `T`. The draws are stored in the wrapped array `A`, which has **one
 more dimension** than the value presents:
 
@@ -12,14 +12,14 @@ more dimension** than the value presents:
 - axes `2:N+1` are the visible shape returned by [`size`](@ref).
 
 So `N = 0` wraps a vector (a scalar RV), `N = 1` wraps a matrix (a vector RV), and so on.
-Indexing an element (`x[i]`, `x[i, j]`) returns a scalar `RandomDraw{T, 0}` holding all
+Indexing an element (`x[i]`, `x[i, j]`) returns a scalar `RVar{T, 0}` holding all
 draws of that element.
 
 Multiple chains are packed into the draws axis with iterations fastest and chains slowest,
 so `ndraws == niterations * nchains`. Use [`draws(x; with_chains=true)`](@ref draws) to
 recover the `(iterations, chains, shape...)` view.
 
-Construct with [`RandomDraw`](@ref RandomDraw(::AbstractArray)), [`as_rs`](@ref),
+Construct with [`RVar`](@ref RVar(::AbstractArray)), [`as_rs`](@ref),
 [`rvar_rng`](@ref), or [`from_chains`](@ref); reduce over draws with `mean`/`std`/`quantile`
 or [`E`](@ref)/[`Pr`](@ref); reduce over the element shape (per draw) with the `rs_*`
 functions.
@@ -30,25 +30,25 @@ does not preserve elementwise identity.
 
 # Deviations from the `AbstractArray` contract
 
-`RandomDraw` subtypes `AbstractArray` to reuse Julia's indexing and `similar` plumbing,
+`RVar` subtypes `AbstractArray` to reuse Julia's indexing and `similar` plumbing,
 not to promise the full contract. Two deliberate deviations:
 
-- `eltype(x) === T`, but `x[i]` returns a `RandomDraw{T, 0}` — every element is itself a
+- `eltype(x) === T`, but `x[i]` returns a `RVar{T, 0}` — every element is itself a
   random variable. `collect`, `Array` and `map` have explicit methods because of this;
   everything routed through `similar` works unchanged. Use [`draws`](@ref) for the raw
   `(ndraws, shape...)` store. The *typed* materialization forms are not among these —
   `collect(Float64, x)`, `convert(Array{Float64}, x)` and `Array{Float64}(x)` still throw
   `MethodError`.
-- `==`, `<`, `<=`, `>`, `>=` compare draw-by-draw and return a `RandomDraw{Bool}`, not a
+- `==`, `<`, `<=`, `>`, `>=` compare draw-by-draw and return a `RVar{Bool}`, not a
   `Bool` (matching R's `rvar`). Use `isequal` for a `Bool`-returning identity test, which
   is what `Dict` and `Set` need.
 """
-struct RandomDraw{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
+struct RVar{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
     draws::A
     nchains::Int
     names::Union{Nothing, Vector{Symbol}}
 
-    function RandomDraw{T, N, A}(draws::A, nchains::Int=1,
+    function RVar{T, N, A}(draws::A, nchains::Int=1,
                                  names::Union{Nothing, AbstractVector{Symbol}}=nothing
                                  ) where {T, N, A <: AbstractArray{T}}
         nchains >= 1 || error("nchains must be >= 1")
@@ -72,15 +72,15 @@ struct RandomDraw{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
     end
 end
 
-Base.eltype(::Type{<:RandomDraw{T}}) where {T} = T
-Base.ndims(::Type{<:RandomDraw{T, N}}) where {T, N} = N
+Base.eltype(::Type{<:RVar{T}}) where {T} = T
+Base.ndims(::Type{<:RVar{T, N}}) where {T, N} = N
 
-function Base.size(x::RandomDraw)
+function Base.size(x::RVar)
     n_extra = ndims(x.draws) - 1
     ntuple(i -> size(x.draws, i + 1), n_extra)
 end
 
-function Base.size(x::RandomDraw, d::Int)
+function Base.size(x::RVar, d::Int)
     nd = ndims(x.draws) - 1
     if d <= nd
         return size(x.draws, d + 1)
@@ -88,14 +88,14 @@ function Base.size(x::RandomDraw, d::Int)
     return 1
 end
 
-Base.length(x::RandomDraw) = prod(size(x))
+Base.length(x::RVar) = prod(size(x))
 
-function Base.axes(x::RandomDraw)
+function Base.axes(x::RVar)
     n_extra = ndims(x.draws) - 1
     ntuple(i -> axes(x.draws, i + 1), n_extra)
 end
 
-function Base.axes(x::RandomDraw, d::Int)
+function Base.axes(x::RVar, d::Int)
     nd = ndims(x.draws) - 1
     if d <= nd
         return axes(x.draws, d + 1)
@@ -103,7 +103,7 @@ function Base.axes(x::RandomDraw, d::Int)
     return Base.OneTo(1)
 end
 
-function _broadcast_draws(x::RandomDraw, n::Int)
+function _broadcast_draws(x::RVar, n::Int)
     old = draws(x)
     sz = size(old)
     if sz[1] == n
@@ -130,7 +130,7 @@ end
 function _combine_nchains(operands...)
     nc = 0  # 0 = not yet seen a non-constant operand
     for x in operands
-        x isa RandomDraw || continue
+        x isa RVar || continue
         size(x.draws, 1) == 1 && continue  # constant: chain-agnostic
         c = x.nchains
         if nc == 0
@@ -152,7 +152,7 @@ function _combine_names(operands...)
     const_nms = nothing
     const_seen = false
     for x in operands
-        x isa RandomDraw || continue
+        x isa RVar || continue
         if size(x.draws, 1) == 1
             if !const_seen
                 const_nms = x.names
@@ -175,7 +175,7 @@ end
 # Attach `nms` to `x` only where it still describes the result elementwise. Broadcasting
 # can change both rank and length (a named length-3 vector RV times a 3x2 matrix RV gives
 # an N=2 result), and stale names are worse than none.
-function _maybe_names(x::RandomDraw{T, N}, nms) where {T, N}
+function _maybe_names(x::RVar{T, N}, nms) where {T, N}
     (nms === nothing || N != 1 || length(nms) != length(x)) && return x
-    return RandomDraw{T, N, typeof(x.draws)}(x.draws, x.nchains, nms)
+    return RVar{T, N, typeof(x.draws)}(x.draws, x.nchains, nms)
 end
