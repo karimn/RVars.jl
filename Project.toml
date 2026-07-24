@@ -1,7 +1,7 @@
 name = "RandomDraws"
-uuid = "a1b2c3d4-0000-4000-8000-000000000000"
+uuid = "108f709a-74fe-47a0-bf6a-d6e5c41d346f"
 authors = ["Karim Naguib"]
-version = "0.1.1"
+version = "0.2.0"
 
 [deps]
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -9,16 +9,21 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [weakdeps]
-MCMCChains = "c7f686f2-ff18-58e9-bc7b-3106c5c0d1b0"
+MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
 
 [extensions]
 RandomDrawsMCMCChainsExt = "MCMCChains"
 
 [compat]
+LinearAlgebra = "1"
+MCMCChains = "6, 7"
+Random = "1"
+Statistics = "1"
 julia = "1.9"
 
 [extras]
+MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["MCMCChains", "Test"]

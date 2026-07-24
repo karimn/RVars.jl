@@ -1,7 +1,18 @@
 using RandomDraws
 using Statistics
 using LinearAlgebra
+using Random
 using Test
+
+# MCMCChains is a test-target dependency that exercises the package extension.
+# Guard it so the suite still runs under a plain `julia --project=. test/runtests.jl`
+# (where MCMCChains is not in the manifest); Pkg.test provides it via [targets].
+const HAS_MCMCCHAINS = try
+    @eval import MCMCChains
+    true
+catch
+    false
+end
 
 @testset "RandomDraws.jl" begin
 
@@ -34,6 +45,12 @@ using Test
         @test niterations(x) == 200
         @test ndraws(x) == 600
         @test size(x) == ()
+
+        # An explicit nchains conflicts with with_chains and is ignored with a warning.
+        x2 = @test_logs (:warn,) RandomDraw(data; with_chains=true, nchains=5)
+        @test nchains(x2) == 3
+        # No warning when nchains is left at its default.
+        @test_logs RandomDraw(data; with_chains=true)
     end
 
     @testset "as_rs" begin
@@ -161,13 +178,13 @@ using Test
         @test nchains(rd) == 4
         @test niterations(rd) == 200
 
-        rd2, names = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp])
+        rd2 = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp])
         @test rd2 isa RandomDraw
-        @test names == [:mu, :sigma, :alpha, :beta, :lp]
+        @test variables(rd2) == [:mu, :sigma, :alpha, :beta, :lp]
 
-        rd3, names3 = from_chains(data, ["mu", "sigma", "alpha", "beta", "lp"])
+        rd3 = from_chains(data, ["mu", "sigma", "alpha", "beta", "lp"])
         @test rd3 isa RandomDraw
-        @test names3 == [:mu, :sigma, :alpha, :beta, :lp]
+        @test variables(rd3) == [:mu, :sigma, :alpha, :beta, :lp]
     end
 
     @testset "Matrix multiplication" begin
@@ -190,10 +207,617 @@ using Test
         @test size(mv) == (3,)
     end
 
+    @testset "Linear algebra and quantile fixes (H8/M2/M3)" begin
+        nd = 20
+
+        # H8: vector-RV × matrix-RV is a per-draw row-vector × matrix (length m == k).
+        vx = randn(nd, 3)
+        my = randn(nd, 3, 2)
+        vm = RandomDraw(vx) * RandomDraw(my)
+        @test vm isa RandomDraw{Float64, 1}
+        @test size(vm) == (2,)
+        @test ndraws(vm) == nd
+        for i in 1:nd
+            @test draws(vm)[i, :] ≈ vec(vx[i, :]' * my[i, :, :])
+        end
+
+        # M2: rs_quantile reduces per draw over elements, like the rest of the rs_ family.
+        xm = RandomDraw(randn(nd, 5))
+        q = rs_quantile(xm, [0.0, 0.5, 1.0])
+        @test q isa RandomDraw{Float64, 1}
+        @test size(q) == (3,)
+        @test ndraws(q) == nd
+        dm = draws(xm)
+        for i in 1:nd
+            @test draws(q)[i, :] ≈ quantile(dm[i, :], [0.0, 0.5, 1.0])
+        end
+
+        # M3: summarise-over-draws quantile with a vector of probabilities.
+        xv = RandomDraw(randn(nd, 4))
+        qs = quantile(xv, [0.25, 0.5, 0.75])
+        @test qs isa AbstractMatrix
+        @test size(qs) == (3, 4)   # (probabilities, elements)
+        dv = draws(xv)
+        for e in 1:4
+            @test qs[:, e] ≈ quantile(dv[:, e], [0.25, 0.5, 0.75])
+        end
+        # scalar probability still reduces to a per-element vector.
+        @test quantile(xv, 0.5) isa AbstractVector
+        @test length(quantile(xv, 0.5)) == 4
+    end
+
+    @testset "Mixed RandomDraw / plain-array linear algebra" begin
+        nd = 15
+        dv = randn(nd, 3)        # vector RV of length 3
+        dM = randn(nd, 2, 3)     # matrix RV, 2x3
+        v = RandomDraw(dv)
+        Mv = RandomDraw(dM)
+        A = randn(3, 4)
+        B = randn(5, 3)
+        pv = randn(3)
+
+        # vector RV × plain matrix -> length 4
+        r1 = v * A
+        @test r1 isa RandomDraw{Float64, 1}
+        @test size(r1) == (4,)
+        for i in 1:nd
+            @test draws(r1)[i, :] ≈ vec(dv[i, :]' * A)
+        end
+
+        # plain matrix × vector RV -> length 5
+        r2 = B * v
+        @test r2 isa RandomDraw{Float64, 1}
+        @test size(r2) == (5,)
+        for i in 1:nd
+            @test draws(r2)[i, :] ≈ B * dv[i, :]
+        end
+
+        # matrix RV × plain vector -> length 2
+        r3 = Mv * pv
+        @test r3 isa RandomDraw{Float64, 1}
+        @test size(r3) == (2,)
+        for i in 1:nd
+            @test draws(r3)[i, :] ≈ dM[i, :, :] * pv
+        end
+
+        # dot against a plain vector, both orders
+        r4 = dot(v, pv)
+        @test r4 isa RandomDraw{Float64, 0}
+        for i in 1:nd
+            @test draws(r4)[i] ≈ dot(dv[i, :], pv)
+        end
+        r5 = dot(pv, v)
+        @test r5 isa RandomDraw{Float64, 0}
+        for i in 1:nd
+            @test draws(r5)[i] ≈ dot(pv, dv[i, :])
+        end
+    end
+
     @testset "Type stability" begin
         x = RandomDraw(rand(1000))
         y = x + x
         @test y isa RandomDraw{Float64}
+    end
+
+    @testset "eltype preservation (M4/M5/M7)" begin
+        # M5: as_rs(::Number) preserves the number's type instead of forcing Float64.
+        @test as_rs(3) isa RandomDraw{Int, 0}
+        @test as_rs(0.1f0) isa RandomDraw{Float32, 0}
+        @test as_rs(1 + 2im) isa RandomDraw{Complex{Int}, 0}
+        @test draws(as_rs(3)) == [3]
+        @test as_rs(2.0) isa RandomDraw{Float64, 0}   # still works
+
+        # M4: rvar_rng preserves the sampler's eltype.
+        r = rvar_rng(n -> rand(1:6, n), 3; ndraws=500)
+        @test r isa RandomDraw{Int, 1}
+        @test size(r) == (3,)
+        @test ndraws(r) == 500
+
+        # M7: rand honors and validates the requested dimensionality N.
+        rng = MersenneTwister(0)
+        a = rand(rng, RandomDraw{Float64, 2}, (2, 3), 100)
+        @test a isa RandomDraw{Float64, 2}
+        @test size(a) == (2, 3)
+        @test ndraws(a) == 100
+        @test_throws ErrorException rand(rng, RandomDraw{Float64, 2}, (3,), 100)
+    end
+
+    @testset "nchains propagation (H5/H6/M6)" begin
+        x = RandomDraw(randn(800, 3), nchains=4)
+        @test nchains(x) == 4
+
+        # H5: combining with a constant (1-draw) operand must not collapse nchains.
+        c = as_rs(2.0)
+        @test nchains(x + c) == 4
+        @test nchains(c + x) == 4
+        @test nchains(x .+ c) == 4
+        @test nchains(x * 2.0) == 4
+        @test nchains(2.0 + x) == 4
+        @test nchains(sin(x)) == 4
+
+        # Two genuinely different chain counts cannot align -> collapse to 1.
+        y = RandomDraw(randn(800, 3), nchains=2)
+        @test nchains(x + y) == 1
+
+        # H6: nchains kwarg must be honored for flat-vector input.
+        v = RandomDraw(collect(1.0:800.0); nchains=4)
+        @test nchains(v) == 4
+        @test niterations(v) == 200
+
+        # M6: a single-draw object cannot claim multiple chains.
+        @test_throws ErrorException RandomDraw(randn(1, 3); nchains=2)
+    end
+
+    @testset "Indexing value correctness (C2/H1/H2)" begin
+        nd = 5
+        # store[k, i, j] distinguishable per (draw, row, col); visible shape (2, 3).
+        store = [1000k + 10i + j for k in 1:nd, i in 1:2, j in 1:3]
+        x = RandomDraw(store)
+        @test x isa RandomDraw{Int, 2}
+        @test size(x) == (2, 3)
+        @test length(x) == 6
+
+        # Cartesian access returns the correct element's draws (H1: column-major).
+        for i in 1:2, j in 1:3
+            el = x[i, j]
+            @test el isa RandomDraw{Int, 0}
+            @test draws(el) == store[:, i, j]
+        end
+
+        # Linear indexing is column-major and agrees with Cartesian.
+        li = LinearIndices((2, 3))
+        for i in 1:2, j in 1:3
+            @test draws(x[li[i, j]]) == draws(x[i, j])
+        end
+        @test draws(x[3]) == store[:, 1, 2]   # column-major: 3 -> (1,2)
+
+        # H2: out-of-range indices must throw, not clamp to the last element.
+        @test_throws BoundsError x[7]
+        @test_throws BoundsError x[0]
+        v = RandomDraw(randn(50, 3))          # N=1
+        @test_throws BoundsError v[4]
+        @test_throws BoundsError v[100]
+
+        # Materializing elements into scalar RVs via a comprehension round-trips.
+        c = [x[i, j] for i in 1:2, j in 1:3]
+        @test c isa Matrix{<:RandomDraw}
+        @test draws(c[2, 3]) == store[:, 2, 3]
+
+        # Logical indexing selects the right columns (flattened, column-major).
+        mask = [true false true; false true false]   # shape (2,3)
+        sel = x[mask]
+        @test sel isa RandomDraw{Int, 1}
+        @test size(sel) == (3,)
+        expected_cols = findall(vec(mask))
+        flat = reshape(store, nd, 6)
+        @test draws(sel) == flat[:, expected_cols]
+
+        # setindex! (scalar) writes across all draws of one element.
+        y = RandomDraw(zeros(nd, 2, 3))
+        y[li[2, 3]] = 7.0
+        @test all(draws(y[2, 3]) .== 7.0)
+        @test all(draws(y[1, 1]) .== 0.0)
+        @test_throws BoundsError (y[7] = 1.0)
+    end
+
+    @testset "Broadcasting over N>=2 RVs (H3)" begin
+        nd = 8
+        store = reshape(collect(1.0:(nd * 6)), nd, 2, 3)
+        x = RandomDraw(store)
+
+        s = sin.(x)
+        @test s isa RandomDraw{Float64, 2}
+        @test size(s) == (2, 3)
+        @test draws(s[1, 2]) == sin.(store[:, 1, 2])
+
+        a = x .+ 0.0
+        @test draws(a[2, 3]) == store[:, 2, 3]
+
+        t = x .+ x
+        @test draws(t[2, 1]) == store[:, 2, 1] .+ store[:, 2, 1]
+
+        # Broadcasting a scalar-RV against a vector-RV expands the singleton.
+        c = as_rs(10.0)                        # N=0, 1 draw
+        w = RandomDraw(randn(nd, 3))
+        cw = c .+ w
+        @test cw isa RandomDraw{Float64, 1}
+        @test size(cw) == (3,)
+    end
+
+    @testset "Fused broadcast expressions" begin
+        nd = 40
+        d = randn(nd, 3)
+        x = RandomDraw(d)
+
+        r1 = sin.(x) .+ 1.0
+        @test r1 isa RandomDraw{Float64, 1}
+        @test size(r1) == (3,)
+        @test draws(r1[2]) ≈ sin.(d[:, 2]) .+ 1.0
+
+        r2 = x .* 2 .+ 1
+        @test r2 isa RandomDraw{Float64, 1}
+        @test draws(r2[1]) ≈ d[:, 1] .* 2 .+ 1
+
+        r3 = 1.0 .+ (x .* 2)
+        @test r3 isa RandomDraw{Float64, 1}
+        @test draws(r3[3]) ≈ 1.0 .+ (d[:, 3] .* 2)
+
+        # Fused expression combining two random variables.
+        y = RandomDraw(randn(nd, 3))
+        dy = draws(y)
+        r4 = (x .+ y) .* 2
+        @test r4 isa RandomDraw{Float64, 1}
+        @test draws(r4[1]) ≈ (d[:, 1] .+ dy[:, 1]) .* 2
+
+        # Fused expression over an N>=2 RV.
+        m = RandomDraw(randn(nd, 2, 3))
+        dm = draws(m)
+        r5 = m .* 2 .+ 1
+        @test r5 isa RandomDraw{Float64, 2}
+        @test size(r5) == (2, 3)
+        @test draws(r5[2, 3]) ≈ dm[:, 2, 3] .* 2 .+ 1
+
+        # nchains survives a fused expression.
+        xc = RandomDraw(randn(800, 3), nchains=4)
+        @test nchains(xc .* 2 .+ 1) == 4
+    end
+
+    @testset "from_chains value correctness (C1)" begin
+        # A[i, v, c] carries a distinguishable value per (iteration, variable, chain).
+        n_iter, n_var, n_chain = 2, 3, 4
+        A = [100c + 10v + i for i in 1:n_iter, v in 1:n_var, c in 1:n_chain]
+        rd = from_chains(A)
+        @test nchains(rd) == n_chain
+        @test niterations(rd) == n_iter
+        @test size(rd) == (n_var,)
+
+        # draws(; with_chains) must reshape the flat draw axis back to (iter, chain, shape...)
+        # with each sample landing exactly where it came from.
+        wc = draws(rd; with_chains=true)
+        @test size(wc) == (n_iter, n_chain, n_var)
+        for i in 1:n_iter, v in 1:n_var, c in 1:n_chain
+            @test wc[i, c, v] == A[i, v, c]
+        end
+
+        # A variable's flat column must gather that variable's samples only,
+        # ordered iteration-fastest then chain.
+        d = draws(rd)
+        for v in 1:n_var
+            expected = vec([A[i, v, c] for i in 1:n_iter, c in 1:n_chain])
+            @test d[:, v] == expected
+        end
+    end
+
+    @testset "AbstractArray contract holes (collect/Array/map)" begin
+        d = reshape(collect(1.0:12.0), 4, 3)   # 4 draws, length-3 vector RV
+        x = RandomDraw(d)
+
+        c = collect(x)
+        @test c isa Vector
+        @test size(c) == (3,)
+        @test all(e -> e isa RandomDraw, c)
+        # collect must agree with the comprehension, element for element.
+        for j in 1:3
+            @test draws(c[j]) == d[:, j]
+        end
+
+        a = Array(x)
+        @test size(a) == (3,)
+        for j in 1:3
+            @test draws(a[j]) == d[:, j]
+        end
+
+        # An N=2 RV collects to a matrix of scalar RVs, preserving position.
+        d2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        y = RandomDraw(d2)
+        c2 = collect(y)
+        @test size(c2) == (2, 3)
+        for i in 1:2, j in 1:3
+            @test draws(c2[i, j]) == d2[:, i, j]
+        end
+
+        # map and broadcast must not disagree.
+        m = map(sin, x)
+        @test m isa RandomDraw
+        @test draws(m) ≈ sin.(d)
+        @test draws(m) ≈ draws(sin.(x))
+
+        # Multi-argument map.
+        x2 = RandomDraw(d .* 2)
+        m2 = map(+, x, x2)
+        @test m2 isa RandomDraw
+        @test draws(m2) ≈ d .+ (d .* 2)
+
+        # map requires equal sizes; it must not silently broadcast-expand.
+        z = RandomDraw(reshape(collect(1.0:8.0), 4, 2))
+        @test_throws DimensionMismatch map(+, x, z)
+    end
+
+    @testset "Names field, variables accessor, isequal" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+
+        # Default: no names, and existing 2-argument construction still works.
+        x = RandomDraw(d)
+        @test variables(x) === nothing
+        @test RandomDraw{Float64, 1, typeof(d)}(d, 1) isa RandomDraw
+
+        # Names attach via the inner constructor's third positional argument.
+        named = RandomDraw{Float64, 1, typeof(d)}(d, 1, [:a, :b, :c])
+        @test variables(named) == [:a, :b, :c]
+        @test draws(named) == d
+        @test nchains(named) == 1
+
+        # Wrong number of names is rejected.
+        @test_throws ErrorException RandomDraw{Float64, 1, typeof(d)}(d, 1, [:a, :b])
+
+        # Names are only valid for N == 1.
+        d0 = collect(1.0:4.0)
+        @test_throws ErrorException RandomDraw{Float64, 0, typeof(d0)}(d0, 1, [:a])
+        d2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        @test_throws ErrorException RandomDraw{Float64, 2, typeof(d2)}(d2, 1, [:a, :b])
+
+        # isequal returns a genuine Bool, unlike == which is elementwise by design.
+        @test isequal(x, RandomDraw(d)) === true
+        @test (x == RandomDraw(d)) isa RandomDraw
+        @test isequal(x, named) === false                       # names differ
+        @test isequal(x, RandomDraw(d, nchains=2)) === false     # nchains differ
+        @test isequal(x, RandomDraw(d .+ 1)) === false           # draws differ
+
+        # Base's AbstractArray hash recurses forever on a scalar RV (x[1] of an N=0
+        # value is another N=0 value), so RandomDraw needs its own method.
+        @test hash(x[1]) isa UInt
+        @test hash(x) == hash(RandomDraw(d))
+        @test isequal(x, RandomDraw(d)) && hash(x) == hash(RandomDraw(d))
+
+        # isequal makes RandomDraw usable as a Dict key.
+        dict = Dict(x => "unnamed", named => "named")
+        @test dict[RandomDraw(d)] == "unnamed"
+        @test length(dict) == 2
+
+        # isequal is total: comparing against a plain array returns false, never throws.
+        @test isequal(x, [1.0, 2.0, 3.0]) === false
+        @test isequal([1.0, 2.0, 3.0], x) === false
+    end
+
+    @testset "Attaching names" begin
+        # from_chains attaches names to the value itself, not alongside it.
+        A = [100c + 10v + i for i in 1:2, v in 1:3, c in 1:4]
+        rd = from_chains(A, [:alpha, :beta, :gamma])
+        @test variables(rd) == [:alpha, :beta, :gamma]
+        @test nchains(rd) == 4
+        # Attaching names must not disturb the draws layout.
+        @test draws(rd) == draws(from_chains(A))
+
+        # Wrong number of names is rejected.
+        @test_throws ErrorException from_chains(A, [:alpha, :beta])
+
+        # The RandomDraw constructor takes a names kwarg.
+        d = reshape(collect(1.0:12.0), 4, 3)
+        x = RandomDraw(d; names=[:a, :b, :c])
+        @test variables(x) == [:a, :b, :c]
+        @test draws(x) == d
+
+        # names composes with nchains.
+        xc = RandomDraw(d; nchains=2, names=[:a, :b, :c])
+        @test nchains(xc) == 2
+        @test variables(xc) == [:a, :b, :c]
+
+        # names composes with with_chains.
+        wc = reshape(collect(1.0:24.0), 2, 4, 3)   # (iterations, chains, 3 vars)
+        xw = RandomDraw(wc; with_chains=true, names=[:a, :b, :c])
+        @test nchains(xw) == 4
+        @test variables(xw) == [:a, :b, :c]
+
+        # Names on a non-vector RV are rejected.
+        d2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        @test_throws ErrorException RandomDraw(d2; names=[:a, :b])
+    end
+
+    @testset "Name-based and names-preserving indexing" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+        x = RandomDraw(d; names=[:a, :b, :c])
+
+        # Indexing by name gives the scalar RV for that parameter.
+        @test draws(x[:b]) == d[:, 2]
+        @test x[:b] isa RandomDraw{Float64, 0}
+        @test variables(x[:b]) === nothing        # a scalar RV has no elements to name
+
+        # A vector of names selects and reorders, carrying the names along.
+        sub = x[[:c, :a]]
+        @test variables(sub) == [:c, :a]
+        @test draws(sub) == d[:, [3, 1]]
+
+        # Integer-vector and range indexing subset the names.
+        @test variables(x[2:3]) == [:b, :c]
+        @test draws(x[2:3]) == d[:, 2:3]
+        @test variables(x[[1, 3]]) == [:a, :c]
+
+        # x[:] keeps every name rather than silently dropping them.
+        @test variables(x[:]) == [:a, :b, :c]
+        @test draws(x[:]) == d
+
+        # Logical indexing still works and also subsets names.
+        @test variables(x[[true, false, true]]) == [:a, :c]
+        @test draws(x[[true, false, true]]) == d[:, [1, 3]]
+
+        # Unknown names error, and the message lists what is available.
+        err = try; x[:zzz]; catch e; sprint(showerror, e); end
+        @test occursin("zzz", err)
+        @test occursin("available: a, b, c", err)
+
+        # Name indexing on an unnamed RV errors rather than returning nonsense.
+        u = RandomDraw(d)
+        @test_throws ErrorException u[:a]
+
+        # Subsetting an unnamed RV still works and stays unnamed.
+        @test variables(u[2:3]) === nothing
+        @test draws(u[2:3]) == d[:, 2:3]
+
+        # nchains survives subsetting.
+        xc = RandomDraw(d; nchains=2, names=[:a, :b, :c])
+        @test nchains(xc[2:3]) == 2
+        @test nchains(xc[:b]) == 2
+    end
+
+    @testset "Name propagation" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+        x = RandomDraw(d; names=[:a, :b, :c])
+        y = RandomDraw(d .* 2; names=[:a, :b, :c])
+        z = RandomDraw(d .* 3; names=[:p, :q, :r])
+        u = RandomDraw(d .* 4)                       # multi-draw, unnamed
+        k = as_rs([10.0, 20.0, 30.0])                # single-draw constant, unnamed
+
+        # Preserved: elementwise ops against a scalar.
+        @test variables(x .+ 1) == [:a, :b, :c]
+        @test variables(x .* 2) == [:a, :b, :c]
+        @test variables(2 .- x) == [:a, :b, :c]
+        @test variables(sin(x)) == [:a, :b, :c]
+        @test variables(-x) == [:a, :b, :c]
+        @test variables(sin.(x)) == [:a, :b, :c]
+        @test variables(x .* 2 .+ 1) == [:a, :b, :c]   # fused broadcast
+
+        # Preserved: two operands whose names agree.
+        @test variables(x .+ y) == [:a, :b, :c]
+        @test variables(x + y) == [:a, :b, :c]
+
+        # Preserved: the other operand is a single-draw constant, so name-agnostic.
+        @test variables(x .+ k) == [:a, :b, :c]
+
+        # Dropped: names disagree, or the other operand is multi-draw and unnamed.
+        @test variables(x .+ z) === nothing
+        @test variables(x .+ u) === nothing
+
+        # Values must be untouched by any of this.
+        @test draws(x .+ y) ≈ d .+ (d .* 2)
+        @test draws(x .+ z) ≈ d .+ (d .* 3)
+
+        # copy preserves; similar and reshape drop.
+        @test variables(copy(x)) == [:a, :b, :c]
+        @test variables(similar(x)) === nothing
+        @test variables(reshape(x, (3,))) === nothing
+
+        # Shape-collapsing operations drop names.
+        @test variables(rs_mean(x)) === nothing
+        A = RandomDraw(randn(4, 2, 3))
+        @test variables(A * x) === nothing
+        @test variables(vcat(x, x)) === nothing
+
+        # _maybe_names must refuse to attach names whose length no longer matches the
+        # broadcast result.
+        one_named = RandomDraw(randn(4, 1); names=[:only])
+        widened = one_named .+ as_rs([1.0, 2.0, 3.0])
+        @test size(widened) == (3,)
+        @test variables(widened) === nothing
+
+        # nchains bookkeeping is unaffected by the names plumbing.
+        xc = RandomDraw(d; nchains=2, names=[:a, :b, :c])
+        @test nchains(xc .+ 1) == 2
+        @test variables(xc .+ 1) == [:a, :b, :c]
+
+        # A named single-draw constant keeps its names when no multi-draw operand supplies
+        # any, so `+` and `.+` agree.
+        sd = RandomDraw(reshape([1.0, 2.0, 3.0], 1, 3); names=[:a, :b, :c])
+        @test variables(sd + 1) == [:a, :b, :c]
+        @test variables(sd .+ 1) == [:a, :b, :c]
+        @test variables(sin(sd)) == [:a, :b, :c]
+        @test variables(sin.(sd)) == [:a, :b, :c]
+        # A multi-draw operand still wins over a differently-named constant.
+        d3 = reshape(collect(1.0:12.0), 4, 3)
+        @test variables(RandomDraw(d3; names=[:p, :q, :r]) .+ sd) == [:p, :q, :r]
+    end
+
+    @testset "show with names" begin
+        d = reshape(collect(1.0:12.0), 4, 3)
+        named = RandomDraw(d; names=[:alpha, :beta, :gamma])
+        s = sprint(show, named)
+        @test occursin("[alpha]", s)
+        @test occursin("[beta]", s)
+        @test occursin("[gamma]", s)
+
+        # Unnamed values keep the positional labels.
+        plain = sprint(show, RandomDraw(d))
+        @test occursin("[1]", plain)
+        @test !occursin("[alpha]", plain)
+
+        # The REPL path (MIME"text/plain") must show the same summary, not Base's
+        # element-by-element array rendering.
+        @test occursin("[alpha]", sprint(show, MIME"text/plain"(), named))
+        @test occursin("±", sprint(show, MIME"text/plain"(), named))
+    end
+
+    @testset "Broadcasting against plain arrays" begin
+        # A plain array is draw-invariant: it enters broadcast as (1, shape...) and repeats
+        # along the draws axis. Before the backing-array rewrite these all threw.
+        d = reshape(collect(1.0:12.0), 4, 3)   # 4 draws, length-3 vector RV
+        x = RandomDraw(d)
+        p = [10.0, 20.0, 30.0]
+        pr = reshape(p, 1, 3)
+
+        @test draws(x .+ p) == d .+ pr
+        @test draws(p .+ x) == pr .+ d
+        @test draws(x .- p) == d .- pr
+        @test draws(x .* p) == d .* pr
+        @test draws(p ./ x) == pr ./ d
+        @test x .+ p isa RandomDraw{Float64, 1}
+
+        # Non-broadcast operators route through the same path.
+        @test draws(x + p) == d .+ pr
+
+        # N = 2, so the logical shape has more than one axis to align.
+        D2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        M = RandomDraw(D2)
+        Q = reshape(collect(1.0:6.0), 2, 3)
+        @test draws(M .+ Q) == D2 .+ reshape(Q, 1, 2, 3)
+
+        # Fused expressions mixing an RV, a plain array and a scalar.
+        @test draws(x .* p .+ 1) == d .* pr .+ 1
+
+        # Metadata survives the plain-array path.
+        @test variables(RandomDraw(d; names=[:a, :b, :c]) .+ p) == [:a, :b, :c]
+        @test nchains(RandomDraw(d; nchains=2) .+ p) == 2
+
+        # A single-draw RandomDraw constant still recycles across draws.
+        @test draws(x .+ as_rs([100.0, 200.0, 300.0])) == d .+ reshape([100.0, 200.0, 300.0], 1, 3)
+
+        # map with a plain array operand routes into the same machinery.
+        @test draws(map(+, x, p)) == d .+ pr
+
+        # Shape mismatches must still be rejected rather than silently recycled.
+        @test_throws DimensionMismatch x .+ [1.0, 2.0]
+    end
+
+    if HAS_MCMCCHAINS
+        @testset "MCMCChains extension value correctness (H7)" begin
+            n_iter, n_var, n_chain = 2, 3, 4
+            val = reshape([100c + 10v + i for i in 1:n_iter, v in 1:n_var, c in 1:n_chain],
+                          n_iter, n_var, n_chain)
+            chn = MCMCChains.Chains(val, [:a, :b, :cc])
+
+            rd = RandomDraw(chn)
+            @test rd isa RandomDraw{<:Any, 1}
+            @test size(rd) == (n_var,)
+            @test nchains(rd) == n_chain
+            @test niterations(rd) == n_iter
+
+            wc = draws(rd; with_chains=true)
+            for i in 1:n_iter, v in 1:n_var, c in 1:n_chain
+                @test wc[i, c, v] == val[i, v, c]
+            end
+
+            # from_chains(::Chains) is the documented alias for the constructor.
+            @test draws(from_chains(chn)) == draws(rd)
+
+            # Parameter names come straight off the Chains object.
+            @test variables(rd) == [:a, :b, :cc]
+            @test variables(from_chains(chn)) == [:a, :b, :cc]
+
+            # Names line up with the right columns, so name lookup and position agree.
+            for (j, nm) in enumerate([:a, :b, :cc])
+                @test draws(rd[nm]) == draws(rd)[:, j]
+            end
+        end
+    else
+        @info "MCMCChains not available; skipping extension tests (run via Pkg.test)"
     end
 
 end
