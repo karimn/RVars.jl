@@ -8,7 +8,7 @@ Julia package for **sample-based random variables** — similar to R's `rvar` fr
 
 ```julia
 julia> # (not yet registered — add directly from GitHub)
-julia> using Pkg; Pkg.add(url="https://github.com/karimn/RandomDraws.jl")
+julia> using Pkg; Pkg.add(url="https://github.com/karimn/RVars.jl")
 ```
 
 ## Quick Start
