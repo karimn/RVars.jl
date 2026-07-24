@@ -1,6 +1,6 @@
 import LinearAlgebra: *, dot
 
-function _prep_matmul(x::RandomDraw, y::RandomDraw)
+function _prep_matmul(x::RVar, y::RVar)
     nx, ny = ndraws(x), ndraws(y)
     if nx != ny && nx != 1 && ny != 1
         error("Incompatible number of draws: $nx vs $ny")
@@ -11,7 +11,7 @@ function _prep_matmul(x::RandomDraw, y::RandomDraw)
     dx, dy, nc
 end
 
-function *(x::RandomDraw{T, 2}, y::RandomDraw{S, 2}) where {T, S}
+function *(x::RVar{T, 2}, y::RVar{S, 2}) where {T, S}
     dx, dy, nc = _prep_matmul(x, y)
     n, m, k = size(dx, 1), size(dx, 2), size(dx, 3)
     p = size(dy, 3)
@@ -19,10 +19,10 @@ function *(x::RandomDraw{T, 2}, y::RandomDraw{S, 2}) where {T, S}
     for i in 1:n
         view(result, i, :, :) .= view(dx, i, :, :) * view(dy, i, :, :)
     end
-    RandomDraw{promote_type(T, S), 2, typeof(result)}(result, nc)
+    RVar{promote_type(T, S), 2, typeof(result)}(result, nc)
 end
 
-function *(x::RandomDraw{T, 2}, y::AbstractMatrix{S}) where {T, S}
+function *(x::RVar{T, 2}, y::AbstractMatrix{S}) where {T, S}
     dx = draws(x)
     n, m, k = size(dx, 1), size(dx, 2), size(dx, 3)
     p = size(y, 2)
@@ -30,10 +30,10 @@ function *(x::RandomDraw{T, 2}, y::AbstractMatrix{S}) where {T, S}
     for i in 1:n
         view(result, i, :, :) .= view(dx, i, :, :) * y
     end
-    RandomDraw{promote_type(T, S), 2, typeof(result)}(result, nchains(x))
+    RVar{promote_type(T, S), 2, typeof(result)}(result, nchains(x))
 end
 
-function *(x::AbstractMatrix{T}, y::RandomDraw{S, 2}) where {T, S}
+function *(x::AbstractMatrix{T}, y::RVar{S, 2}) where {T, S}
     dy = draws(y)
     n, k, p = size(dy, 1), size(dy, 2), size(dy, 3)
     m = size(x, 1)
@@ -41,10 +41,10 @@ function *(x::AbstractMatrix{T}, y::RandomDraw{S, 2}) where {T, S}
     for i in 1:n
         view(result, i, :, :) .= x * view(dy, i, :, :)
     end
-    RandomDraw{promote_type(T, S), 2, typeof(result)}(result, nchains(y))
+    RVar{promote_type(T, S), 2, typeof(result)}(result, nchains(y))
 end
 
-function *(x::RandomDraw{T, 1}, y::RandomDraw{S, 2}) where {T, S}
+function *(x::RVar{T, 1}, y::RVar{S, 2}) where {T, S}
     dx, dy, nc = _prep_matmul(x, y)
     n = size(dx, 1)
     m = size(dx, 2)
@@ -56,10 +56,10 @@ function *(x::RandomDraw{T, 1}, y::RandomDraw{S, 2}) where {T, S}
         # Row-vector × matrix: (1×m)(m×p) -> length-p row, per draw.
         result[i, :] .= vec(view(dx, i, :)' * view(dy, i, :, :))
     end
-    RandomDraw{promote_type(T, S), 1, typeof(result)}(result, nc)
+    RVar{promote_type(T, S), 1, typeof(result)}(result, nc)
 end
 
-function *(x::RandomDraw{T, 2}, y::RandomDraw{S, 1}) where {T, S}
+function *(x::RVar{T, 2}, y::RVar{S, 1}) where {T, S}
     dx, dy, nc = _prep_matmul(x, y)
     n = size(dx, 1)
     m = size(dx, 2)
@@ -67,10 +67,10 @@ function *(x::RandomDraw{T, 2}, y::RandomDraw{S, 1}) where {T, S}
     for i in 1:n
         result[i, :] .= view(dx, i, :, :) * view(dy, i, :)
     end
-    RandomDraw{promote_type(T, S), 1, typeof(result)}(result, nc)
+    RVar{promote_type(T, S), 1, typeof(result)}(result, nc)
 end
 
-function *(x::RandomDraw{T, 1}, y::AbstractVector{S}) where {T, S}
+function *(x::RVar{T, 1}, y::AbstractVector{S}) where {T, S}
     dx = draws(x)
     n = size(dx, 1)
     m = size(dx, 2)
@@ -78,10 +78,10 @@ function *(x::RandomDraw{T, 1}, y::AbstractVector{S}) where {T, S}
     for i in 1:n
         result[i] = dot(view(dx, i, :), y)
     end
-    RandomDraw{promote_type(T, S), 0, typeof(result)}(result, nchains(x))
+    RVar{promote_type(T, S), 0, typeof(result)}(result, nchains(x))
 end
 
-function *(x::AbstractVector{T}, y::RandomDraw{S, 1}) where {T, S}
+function *(x::AbstractVector{T}, y::RVar{S, 1}) where {T, S}
     dy = draws(y)
     n = size(dy, 1)
     m = size(dy, 2)
@@ -89,14 +89,14 @@ function *(x::AbstractVector{T}, y::RandomDraw{S, 1}) where {T, S}
     for i in 1:n
         result[i] = dot(x, view(dy, i, :))
     end
-    RandomDraw{promote_type(T, S), 0, typeof(result)}(result, nchains(y))
+    RVar{promote_type(T, S), 0, typeof(result)}(result, nchains(y))
 end
 
 # Mixed vector-RV / plain-matrix products. Without these the generic AbstractArray
 # fallbacks either throw (a vector RV is seen as an m×1 column) or, for dot, recurse
 # until the stack overflows.
 
-function *(x::RandomDraw{T, 1}, y::AbstractMatrix{S}) where {T, S}
+function *(x::RVar{T, 1}, y::AbstractMatrix{S}) where {T, S}
     dx = draws(x)
     n, m = size(dx, 1), size(dx, 2)
     k, p = size(y, 1), size(y, 2)
@@ -105,10 +105,10 @@ function *(x::RandomDraw{T, 1}, y::AbstractMatrix{S}) where {T, S}
     for i in 1:n
         result[i, :] .= vec(view(dx, i, :)' * y)
     end
-    RandomDraw{promote_type(T, S), 1, typeof(result)}(result, nchains(x))
+    RVar{promote_type(T, S), 1, typeof(result)}(result, nchains(x))
 end
 
-function *(x::AbstractMatrix{T}, y::RandomDraw{S, 1}) where {T, S}
+function *(x::AbstractMatrix{T}, y::RVar{S, 1}) where {T, S}
     dy = draws(y)
     n, k = size(dy, 1), size(dy, 2)
     m = size(x, 1)
@@ -117,10 +117,10 @@ function *(x::AbstractMatrix{T}, y::RandomDraw{S, 1}) where {T, S}
     for i in 1:n
         result[i, :] .= x * view(dy, i, :)
     end
-    RandomDraw{promote_type(T, S), 1, typeof(result)}(result, nchains(y))
+    RVar{promote_type(T, S), 1, typeof(result)}(result, nchains(y))
 end
 
-function *(x::RandomDraw{T, 2}, y::AbstractVector{S}) where {T, S}
+function *(x::RVar{T, 2}, y::AbstractVector{S}) where {T, S}
     dx = draws(x)
     n, m, k = size(dx, 1), size(dx, 2), size(dx, 3)
     k == length(y) || throw(DimensionMismatch("matrix columns $k do not match vector length $(length(y))"))
@@ -128,10 +128,10 @@ function *(x::RandomDraw{T, 2}, y::AbstractVector{S}) where {T, S}
     for i in 1:n
         result[i, :] .= view(dx, i, :, :) * y
     end
-    RandomDraw{promote_type(T, S), 1, typeof(result)}(result, nchains(x))
+    RVar{promote_type(T, S), 1, typeof(result)}(result, nchains(x))
 end
 
-function *(x::AbstractVector{T}, y::RandomDraw{S, 2}) where {T, S}
+function *(x::AbstractVector{T}, y::RVar{S, 2}) where {T, S}
     dy = draws(y)
     n, k, p = size(dy, 1), size(dy, 2), size(dy, 3)
     length(x) == k || throw(DimensionMismatch("vector length $(length(x)) does not match matrix rows $k"))
@@ -139,10 +139,10 @@ function *(x::AbstractVector{T}, y::RandomDraw{S, 2}) where {T, S}
     for i in 1:n
         result[i, :] .= vec(x' * view(dy, i, :, :))
     end
-    RandomDraw{promote_type(T, S), 1, typeof(result)}(result, nchains(y))
+    RVar{promote_type(T, S), 1, typeof(result)}(result, nchains(y))
 end
 
-function dot(x::RandomDraw{T, 1}, y::RandomDraw{S, 1}) where {T, S}
+function dot(x::RVar{T, 1}, y::RVar{S, 1}) where {T, S}
     dx, dy, nc = _prep_matmul(x, y)
     n = size(dx, 1)
     m = size(dx, 2)
@@ -150,10 +150,10 @@ function dot(x::RandomDraw{T, 1}, y::RandomDraw{S, 1}) where {T, S}
     for i in 1:n
         result[i] = dot(view(dx, i, :), view(dy, i, :))
     end
-    RandomDraw{promote_type(T, S), 0, typeof(result)}(result, nc)
+    RVar{promote_type(T, S), 0, typeof(result)}(result, nc)
 end
 
-function dot(x::RandomDraw{T, 1}, y::AbstractVector{S}) where {T, S}
+function dot(x::RVar{T, 1}, y::AbstractVector{S}) where {T, S}
     dx = draws(x)
     n = size(dx, 1)
     size(dx, 2) == length(y) || throw(DimensionMismatch("lengths $(size(dx, 2)) and $(length(y)) do not match"))
@@ -161,10 +161,10 @@ function dot(x::RandomDraw{T, 1}, y::AbstractVector{S}) where {T, S}
     for i in 1:n
         result[i] = dot(view(dx, i, :), y)
     end
-    RandomDraw{promote_type(T, S), 0, typeof(result)}(result, nchains(x))
+    RVar{promote_type(T, S), 0, typeof(result)}(result, nchains(x))
 end
 
-function dot(x::AbstractVector{T}, y::RandomDraw{S, 1}) where {T, S}
+function dot(x::AbstractVector{T}, y::RVar{S, 1}) where {T, S}
     dy = draws(y)
     n = size(dy, 1)
     length(x) == size(dy, 2) || throw(DimensionMismatch("lengths $(length(x)) and $(size(dy, 2)) do not match"))
@@ -172,5 +172,5 @@ function dot(x::AbstractVector{T}, y::RandomDraw{S, 1}) where {T, S}
     for i in 1:n
         result[i] = dot(x, view(dy, i, :))
     end
-    RandomDraw{promote_type(T, S), 0, typeof(result)}(result, nchains(y))
+    RVar{promote_type(T, S), 0, typeof(result)}(result, nchains(y))
 end
