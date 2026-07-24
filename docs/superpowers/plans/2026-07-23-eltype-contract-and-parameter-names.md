@@ -18,7 +18,9 @@
 - Chains are packed into axis 1 with iterations fastest. Any reconstruction must thread the source `nchains` through.
 - New public names must be added to the `export` list in `src/RandomDraws.jl`.
 - Parameter names are valid **only** for `N == 1` and must have `length(names) == size(draws, 2)`.
-- **Running tests:** `julia --project=. test/runtests.jl` from the package root. Julia has no CLI test filter, so every "run the test" step runs the whole suite; check the named `@testset` in the summary output. Do **not** use `Pkg.test()` — it fails on this machine because the local General registry is compressed (`General.tar.gz`) and the sandbox resolve cannot find `MCMCChains`. Under the plain command, `HAS_MCMCCHAINS` is `false` and the extension testsets skip; that is expected.
+- **Running tests:** `julia --project=. test/runtests.jl` from the package root. Julia has no CLI test filter, so every "run the test" step runs the whole suite; check the named `@testset` in the summary output. `Pkg.test()` is the full command and also runs the extension testsets. Under the plain command, `HAS_MCMCCHAINS` is `false` and those testsets skip; that is expected.
+
+  **Correction (post-merge).** While this plan was executing, `Pkg.test()` was believed broken on this machine and attributed to a compressed local General registry. That diagnosis was wrong. The real cause was a wrong `MCMCChains` UUID in `Project.toml` (`…-3106c5c0d1b0` instead of `…-31028e88f75d`), which made resolution fail everywhere — including in CI. The temp-environment workaround the tasks below use was therefore unnecessary; `Pkg.test()` works once the UUID is right.
 - New testsets go inside the outer `@testset "RandomDraws.jl"` block, inserted immediately **before** the `if HAS_MCMCCHAINS` guard at `test/runtests.jl:491`.
 
 ## File Structure
@@ -874,7 +876,7 @@ git commit -m "Label show output with parameter names when present"
 - Consumes: `from_chains(array, param_names)` from Task 3, `variables` from Task 2.
 - Produces: nothing other tasks depend on. This is the final task.
 
-**Note on running these tests:** under `julia --project=. test/runtests.jl`, `HAS_MCMCCHAINS` is `false` and this testset skips, so that command cannot verify this task. Use the temporary-environment script in Step 2 instead. `Pkg.test()` does not work on this machine (compressed General registry).
+**Note on running these tests:** under `julia --project=. test/runtests.jl`, `HAS_MCMCCHAINS` is `false` and this testset skips, so that command cannot verify this task. Use the temporary-environment script in Step 2, or `Pkg.test()` — see the correction in Global Constraints; `Pkg.test()` was wrongly believed broken while this plan ran.
 
 - [ ] **Step 1: Write the failing test**
 

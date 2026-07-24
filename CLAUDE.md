@@ -11,10 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Run from the package root.
 
 ```bash
-# Full test suite
+# Full test suite — the only command that exercises the MCMCChains extension,
+# because Pkg.test provides MCMCChains via [extras]/[targets]
 julia --project=. -e 'using Pkg; Pkg.test()'
 
-# Faster iteration (reuses the current environment, no sandbox)
+# Faster iteration (reuses the current environment, no sandbox). MCMCChains is
+# not in this environment, so HAS_MCMCCHAINS is false and the extension
+# testsets skip — expected, not a failure. Use Pkg.test to cover them.
 julia --project=. test/runtests.jl
 
 # Run one @testset — Julia has no CLI test filter, so temporarily wrap the
@@ -28,6 +31,8 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
 CI (`.github/workflows/CI.yml`) runs `Pkg.test()` on Julia 1.9, 1.10, and 1.11 for every PR and push to `main`. The `compat` floor is Julia 1.9 — avoid syntax/stdlib newer than that.
+
+If `Pkg.test()` fails with `expected package MCMCChains [c7f686f2] to be registered`, check the UUID in `Project.toml` against the registry before blaming the local registry or the sandbox. That exact error was misdiagnosed once as a compressed local registry and worked around with a throwaway environment for a whole session; the real cause was a wrong UUID in `[weakdeps]`/`[extras]`, which fails identically on every machine and in CI. The name resolves, the UUID does not — so `Pkg.add("MCMCChains")` succeeds while `Pkg.test()` fails, which is what made it look machine-specific.
 
 ## Core data model
 
