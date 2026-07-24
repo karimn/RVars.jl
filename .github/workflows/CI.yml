@@ -18,4 +18,4 @@ jobs:
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v2
-      - uses: julia-actions/julia-runtest@v2
+      - uses: julia-actions/julia-runtest@v1

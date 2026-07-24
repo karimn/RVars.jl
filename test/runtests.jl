@@ -745,6 +745,47 @@ end
         @test occursin("±", sprint(show, MIME"text/plain"(), named))
     end
 
+    @testset "Broadcasting against plain arrays" begin
+        # A plain array is draw-invariant: it enters broadcast as (1, shape...) and repeats
+        # along the draws axis. Before the backing-array rewrite these all threw.
+        d = reshape(collect(1.0:12.0), 4, 3)   # 4 draws, length-3 vector RV
+        x = RandomDraw(d)
+        p = [10.0, 20.0, 30.0]
+        pr = reshape(p, 1, 3)
+
+        @test draws(x .+ p) == d .+ pr
+        @test draws(p .+ x) == pr .+ d
+        @test draws(x .- p) == d .- pr
+        @test draws(x .* p) == d .* pr
+        @test draws(p ./ x) == pr ./ d
+        @test x .+ p isa RandomDraw{Float64, 1}
+
+        # Non-broadcast operators route through the same path.
+        @test draws(x + p) == d .+ pr
+
+        # N = 2, so the logical shape has more than one axis to align.
+        D2 = reshape(collect(1.0:24.0), 4, 2, 3)
+        M = RandomDraw(D2)
+        Q = reshape(collect(1.0:6.0), 2, 3)
+        @test draws(M .+ Q) == D2 .+ reshape(Q, 1, 2, 3)
+
+        # Fused expressions mixing an RV, a plain array and a scalar.
+        @test draws(x .* p .+ 1) == d .* pr .+ 1
+
+        # Metadata survives the plain-array path.
+        @test variables(RandomDraw(d; names=[:a, :b, :c]) .+ p) == [:a, :b, :c]
+        @test nchains(RandomDraw(d; nchains=2) .+ p) == 2
+
+        # A single-draw RandomDraw constant still recycles across draws.
+        @test draws(x .+ as_rs([100.0, 200.0, 300.0])) == d .+ reshape([100.0, 200.0, 300.0], 1, 3)
+
+        # map with a plain array operand routes into the same machinery.
+        @test draws(map(+, x, p)) == d .+ pr
+
+        # Shape mismatches must still be rejected rather than silently recycled.
+        @test_throws DimensionMismatch x .+ [1.0, 2.0]
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4
