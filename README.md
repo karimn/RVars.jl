@@ -1,6 +1,6 @@
 # RVars.jl
 
-[![CI](https://github.com/karimn/RandomDraws.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/karimn/RandomDraws.jl/actions/workflows/CI.yml)
+[![CI](https://github.com/karimn/RVars.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/karimn/RVars.jl/actions/workflows/CI.yml)
 
 Julia package for **sample-based random variables** — similar to R's `rvar` from the [`posterior`](https://mc-stan.org/posterior/) package. A `RVar` wraps a Monte Carlo sample (draws) behind an `AbstractArray` interface, letting you work with random quantities using normal array syntax.
 
@@ -122,4 +122,4 @@ from_chains(Array(chn))  # works without MCMCChains loaded
 
 ## Status
 
-Early development. See [open issues](https://github.com/karimn/RandomDraws.jl/issues) for planned features.
+Early development. See [open issues](https://github.com/karimn/RVars.jl/issues) for planned features.
