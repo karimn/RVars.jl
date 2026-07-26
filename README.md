@@ -190,6 +190,33 @@ from_chains(arr, pnames; flat=true)  # opt out of grouping: one named vector RVa
 `flat=true` returns the ungrouped vector `RVar` whose elements are the flat columns,
 carrying the per-element names verbatim (read them with `variables(x)`).
 
+### Long tables via `gather_draws`
+
+Downstream consumers — `DataFrame`, `CSV.write`, plotting via
+[AlgebraOfGraphics](https://github.com/MakieOrg/AlgebraOfGraphics.jl) — are table-shaped,
+not array-shaped. `gather_draws` is the tidybayes `gather_draws` analogue: it flattens a
+`RVar` (or a `NamedTuple` of them) into one row per draw × element, with one column per
+dimension carrying that dimension's labels. The result is a `NamedTuple` of equal-length
+vectors, which is already a valid Tables.jl column table — no `Tables.jl` dependency
+needed.
+
+```julia
+p = RVar(chn; dims = (a = (:trial, :arm),), labels = (arm = ["control", "drug"],))
+
+gather_draws(p.a)
+# (trial = [...], arm = [...], chain = [...], draw = [...], value = [...])
+
+gather_draws(p)
+# (variable = [...], trial = [...], arm = [...], chain = [...], draw = [...], value = [...])
+
+using AlgebraOfGraphics, CairoMakie
+data(gather_draws(p.a)) * mapping(:arm, :value; color = :arm) * visual(BoxPlot) |> draw
+```
+
+Gathering several parameters at once takes the union of their dimension columns, filling
+`missing` where a parameter lacks a dimension the others have. Label element types are
+preserved rather than stringified, so an `Int` or `Symbol` axis label round-trips as such.
+
 ## API
 
 ### Draw accessors
@@ -213,6 +240,7 @@ carrying the per-element names verbatim (read them with `variables(x)`).
 - `dimlabels(x)` / `dimlabels(x, dim)` — the labels along each axis
 - `x[dim=index]` — index by dimension name, by position or by label
 - `recover_types(data)` — derive labels from the data the model was fitted to
+- `gather_draws(x)` / `gather_draws(nt)` — flatten a `RVar` (or `NamedTuple` of them) into a long table
 
 ### Statistics over draws (returns plain array)
 
