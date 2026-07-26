@@ -14,6 +14,15 @@ catch
     false
 end
 
+# Tables is a test-only dependency, used solely for a Tables.jl-interface smoke test on
+# gather_draws; guard it the same way as MCMCChains above.
+const HAS_TABLES = try
+    @eval import Tables
+    true
+catch
+    false
+end
+
 @testset "RVars.jl" begin
 
     @testset "Constructors" begin
@@ -1011,6 +1020,144 @@ end
         @test dimnames(p.a) == (:patient, :arm)
         @test dimlabels(p.a) == ([1, 2, 3], ["control", "drug"])
         @test draws(p.a[patient=3, arm="drug"]) == draws(p.a[3, 2])
+    end
+
+    @testset "gather_draws" begin
+        @testset "rank 0, chain/draw packing" begin
+            x = RVar(collect(1.0:6.0); nchains=2)  # niterations = 3
+            g = gather_draws(x)
+            @test keys(g) == (:chain, :draw, :value)
+            @test g.chain == [1, 1, 1, 2, 2, 2]
+            @test g.draw == [1, 2, 3, 1, 2, 3]
+            @test g.value == collect(1.0:6.0)
+        end
+
+        @testset "rank 1/2/3 via rvars, round-trip" begin
+            n_trial, n_arm = 2, 3
+            nms = [[Symbol("a[$i,$j]") for j in 1:n_arm for i in 1:n_trial]..., :s]
+            A = float([1000v + 100c + i for i in 1:2, v in 1:length(nms), c in 1:4])
+            arms = ["control", "drug", "placebo"]
+            p = rvars(A, nms; dims=(a=(:trial, :arm),), labels=(arm=arms,))
+
+            gs = gather_draws(p.s)
+            @test keys(gs) == (:chain, :draw, :value)
+            @test length(gs.value) == ndraws(p.s)
+
+            ga = gather_draws(p.a)
+            @test Set(keys(ga)) == Set((:trial, :arm, :chain, :draw, :value))
+            nrows = ndraws(p.a) * length(p.a)
+            @test length(ga.value) == nrows
+            @test eltype(ga.trial) == Int
+            @test eltype(ga.arm) == String
+            nit = niterations(p.a)
+            d = draws(p.a)
+            seen = Set{NTuple{3, Int}}()
+            for r in 1:nrows
+                tr = ga.trial[r]
+                ar = findfirst(==(ga.arm[r]), arms)
+                draw_lin = (ga.chain[r] - 1) * nit + ga.draw[r]
+                @test ga.value[r] == d[draw_lin, tr, ar]
+                push!(seen, (draw_lin, tr, ar))
+            end
+            # Every (draw, trial, arm) combination appears exactly once.
+            @test length(seen) == nrows
+            @test seen == Set((i, j, k) for i in 1:ndraws(p.a), j in 1:n_trial, k in 1:n_arm)
+
+            nms3 = [Symbol("b[$i,$j,$k]") for k in 1:2 for j in 1:n_arm for i in 1:n_trial]
+            A3 = float([1000v + 100c + i for i in 1:2, v in 1:length(nms3), c in 1:4])
+            q = rvars(A3, nms3; dims=(b=(:trial, :arm, :time),), labels=(arm=arms,))
+            gb = gather_draws(q.b)
+            @test Set(keys(gb)) == Set((:trial, :arm, :time, :chain, :draw, :value))
+            @test length(gb.value) == ndraws(q.b) * length(q.b)
+        end
+
+        @testset "unnamed dimensions fall back to :dim1, :dim2" begin
+            x = RVar(reshape(1.0:24.0, 4, 2, 3))
+            g = gather_draws(x)
+            @test Set(keys(g)) == Set((:dim1, :dim2, :chain, :draw, :value))
+            @test eltype(g.dim1) == Int
+            @test eltype(g.dim2) == Int
+        end
+
+        @testset "non-String labels preserved (Int, Symbol)" begin
+            x = RVar(reshape(1.0:12.0, 2, 2, 3); dimnames=(:idx, :sym),
+                     dimlabels=([10, 20], [:a, :b, :c]))
+            g = gather_draws(x)
+            @test eltype(g.idx) == Int
+            @test eltype(g.sym) == Symbol
+            @test Set(zip(g.idx, g.sym)) == Set((i, s) for i in (10, 20), s in (:a, :b, :c))
+        end
+
+        @testset "flat vector element names are not used as labels" begin
+            nms_flat = [:alpha, :beta, :gamma]
+            Aflat = float([1000v + 100c + i for i in 1:2, v in 1:3, c in 1:4])
+            fv = from_chains(Aflat, nms_flat; flat=true)
+            @test dimnames(fv) === nothing
+            g = gather_draws(fv)
+            @test Set(keys(g)) == Set((:dim1, :chain, :draw, :value))
+            @test eltype(g.dim1) == Int
+        end
+
+        @testset "collisions with reserved column names" begin
+            mk(nm) = RVar(reshape(1.0:8.0, 4, 2); dimnames=(nm,))
+            @test_throws ErrorException gather_draws(mk(:chain))
+            @test_throws ErrorException gather_draws(mk(:draw))
+            @test_throws ErrorException gather_draws(mk(:value))
+
+            xvar = mk(:variable)
+            @test gather_draws(xvar) isa NamedTuple  # fine on its own
+            @test_throws ErrorException gather_draws((x=xvar,))  # collides once wrapped
+        end
+
+        @testset "NamedTuple of RVars: :variable column and ragged dimensions" begin
+            n_trial, n_arm = 2, 3
+            nms = [[Symbol("a[$i,$j]") for j in 1:n_arm for i in 1:n_trial]..., :s]
+            A = float([1000v + 100c + i for i in 1:2, v in 1:length(nms), c in 1:4])
+            arms = ["control", "drug", "placebo"]
+            p = rvars(A, nms; dims=(a=(:trial, :arm),), labels=(arm=arms,))
+
+            gp = gather_draws(p)
+            @test Set(keys(gp)) == Set((:variable, :trial, :arm, :chain, :draw, :value))
+            @test Set(unique(gp.variable)) == Set((:a, :s))
+            @test length(gp.value) == ndraws(p.a) * length(p.a) + ndraws(p.s)
+
+            s_rows = findall(==(:s), gp.variable)
+            a_rows = findall(==(:a), gp.variable)
+            @test all(ismissing, gp.trial[s_rows])
+            @test all(ismissing, gp.arm[s_rows])
+            @test !any(ismissing, gp.trial[a_rows])
+            @test !any(ismissing, gp.arm[a_rows])
+            @test eltype(gp.trial) == Union{Missing, Int}
+            @test eltype(gp.arm) == Union{Missing, String}
+        end
+
+        @testset "NamedTuple of RVars: disagreeing labels error" begin
+            n_trial, n_arm = 2, 3
+            nms = [Symbol("a[$i,$j]") for j in 1:n_arm for i in 1:n_trial]
+            A = float([1000v + 100c + i for i in 1:2, v in 1:length(nms), c in 1:4])
+            a1 = rvars(A, nms; dims=(a=(:trial, :arm),),
+                       labels=(arm=["control", "drug", "placebo"],)).a
+            a2 = rvars(A, nms; dims=(a=(:trial, :arm),), labels=(arm=["x", "y", "z"],)).a
+            @test_throws ErrorException gather_draws((p1=a1, p2=a2))
+            # Agreeing labels (same object built the same way) do not error.
+            a3 = rvars(A, nms; dims=(a=(:trial, :arm),),
+                       labels=(arm=["control", "drug", "placebo"],)).a
+            @test gather_draws((p1=a1, p3=a3)) isa NamedTuple
+        end
+
+        @testset "empty NamedTuple errors" begin
+            @test_throws ErrorException gather_draws(NamedTuple())
+        end
+
+        if HAS_TABLES
+            @testset "Tables.jl interface" begin
+                x = RVar(reshape(1.0:12.0, 2, 2, 3); dimnames=(:idx, :sym),
+                         dimlabels=([10, 20], [:a, :b, :c]))
+                g = gather_draws(x)
+                @test Tables.istable(typeof(g))
+                @test Tables.columntable(g) == g
+            end
+        end
     end
 
     if HAS_MCMCCHAINS

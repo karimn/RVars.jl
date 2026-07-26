@@ -6,7 +6,7 @@ using Random
 
 export RVar, as_rs, draws, ndraws, nchains, niterations, variables, dimnames, dimlabels
 export rs_mean, rs_sum, rs_sd, rs_var, rs_median, rs_min, rs_max, rs_quantile
-export E, Pr, rvar_rng, from_chains, rvars, recover_types
+export E, Pr, rvar_rng, from_chains, rvars, recover_types, gather_draws
 
 include("types.jl")
 include("constructors.jl")
@@ -17,5 +17,6 @@ include("matmul.jl")
 include("stats.jl")
 include("params.jl")
 include("chains.jl")
+include("gather_draws.jl")
 
 end
