@@ -19,3 +19,22 @@ jobs:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-runtest@v1
+
+  version-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Project.toml version was bumped
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          base_version=$(git show "origin/${{ github.base_ref }}:Project.toml" | grep -m1 '^version' | cut -d '"' -f2)
+          pr_version=$(grep -m1 '^version' Project.toml | cut -d '"' -f2)
+          echo "Base branch version: $base_version"
+          echo "This PR's version:   $pr_version"
+          if [ "$base_version" = "$pr_version" ]; then
+            echo "::error file=Project.toml::Version was not bumped (still $pr_version). Every PR must bump the version in Project.toml."
+            exit 1
+          fi
