@@ -178,13 +178,19 @@ end
         @test nchains(rd) == 4
         @test niterations(rd) == 200
 
+        # With names, the default is one random variable per model parameter.
         rd2 = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp])
-        @test rd2 isa RVar
-        @test variables(rd2) == [:mu, :sigma, :alpha, :beta, :lp]
+        @test rd2 isa NamedTuple
+        @test keys(rd2) == (:mu, :sigma, :alpha, :beta, :lp)
+        @test all(v -> v isa RVar{Float64, 0}, values(rd2))
 
         rd3 = from_chains(data, ["mu", "sigma", "alpha", "beta", "lp"])
-        @test rd3 isa RVar
-        @test variables(rd3) == [:mu, :sigma, :alpha, :beta, :lp]
+        @test keys(rd3) == (:mu, :sigma, :alpha, :beta, :lp)
+
+        # flat=true keeps the ungrouped named vector RVar.
+        rd4 = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp]; flat=true)
+        @test rd4 isa RVar{Float64, 1}
+        @test variables(rd4) == [:mu, :sigma, :alpha, :beta, :lp]
     end
 
     @testset "Matrix multiplication" begin
@@ -580,15 +586,16 @@ end
     end
 
     @testset "Attaching names" begin
-        # from_chains attaches names to the value itself, not alongside it.
+        # from_chains(...; flat=true) attaches names to the value itself, not alongside it.
         A = [100c + 10v + i for i in 1:2, v in 1:3, c in 1:4]
-        rd = from_chains(A, [:alpha, :beta, :gamma])
+        rd = from_chains(A, [:alpha, :beta, :gamma]; flat=true)
         @test variables(rd) == [:alpha, :beta, :gamma]
         @test nchains(rd) == 4
         # Attaching names must not disturb the draws layout.
         @test draws(rd) == draws(from_chains(A))
 
         # Wrong number of names is rejected.
+        @test_throws ErrorException from_chains(A, [:alpha, :beta]; flat=true)
         @test_throws ErrorException from_chains(A, [:alpha, :beta])
 
         # The RVar constructor takes a names kwarg.
@@ -786,6 +793,90 @@ end
         @test_throws DimensionMismatch x .+ [1.0, 2.0]
     end
 
+    @testset "rvars regroups flattened array parameters" begin
+        # A[i, v, c] carries a distinguishable value per (iteration, variable, chain), so a
+        # misplaced element cannot coincide with the right one.
+        n_iter, n_chain = 2, 4
+        nms = [:sigma,
+               Symbol("x[1,1]"), Symbol("x[2,1]"), Symbol("x[1,2]"),
+               Symbol("x[2,2]"), Symbol("x[1,3]"), Symbol("x[2,3]"),
+               Symbol("b[1]"), Symbol("b[2]")]
+        A = float([1000v + 100c + i for i in 1:n_iter, v in 1:length(nms), c in 1:n_chain])
+
+        p = from_chains(A, nms)
+        @test p isa NamedTuple
+        @test keys(p) == (:sigma, :x, :b)
+
+        # A scalar parameter stays a scalar RV; shapes come from the parsed indices.
+        @test p.sigma isa RVar{Float64, 0}
+        @test p.x isa RVar{Float64, 2}
+        @test size(p.x) == (2, 3)
+        @test p.b isa RVar{Float64, 1}
+        @test size(p.b) == (2,)
+
+        # Indexing the reassembled array parameter gives a scalar RV over all draws.
+        @test p.x[1, 3] isa RVar{Float64, 0}
+        @test ndraws(p.x[1, 3]) == n_iter * n_chain
+
+        # Chain bookkeeping survives the regrouping.
+        for v in values(p)
+            @test nchains(v) == n_chain
+            @test niterations(v) == n_iter
+            @test ndraws(v) == n_iter * n_chain
+        end
+
+        # Every element must hold exactly the draws of its own flat column.
+        flat = from_chains(A, nms; flat=true)
+        @test draws(p.sigma) == draws(flat[:sigma])
+        for t in 1:2, pat in 1:3
+            @test draws(p.x[t, pat]) == draws(flat[Symbol("x[$t,$pat]")])
+        end
+        for k in 1:2
+            @test draws(p.b[k]) == draws(flat[Symbol("b[$k]")])
+        end
+
+        # Placement is by parsed index, not by column order: shuffling the names must
+        # permute the columns and leave the assembled parameter identical.
+        perm = [1, 7, 3, 5, 2, 6, 4, 9, 8]
+        q = from_chains(A[:, perm, :], nms[perm])
+        @test keys(q) == (:sigma, :x, :b)
+        @test draws(q.x) == draws(p.x)
+        @test draws(q.b) == draws(p.b)
+
+        # Names without a bracketed integer index are left alone as scalars.
+        odd = [:sigma, Symbol("x[a]"), Symbol("x[1]")]
+        r = from_chains(A[:, 1:3, :], odd)
+        @test keys(r) == (:sigma, Symbol("x[a]"), :x)
+        @test r.x isa RVar{Float64, 1}
+        @test size(r.x) == (1,)
+    end
+
+    @testset "rvars rejects malformed parameter names" begin
+        A = float([1000v + 100c + i for i in 1:2, v in 1:4, c in 1:4])
+
+        # A gap in the index range would silently produce garbage elements.
+        @test_throws ErrorException from_chains(A, [Symbol("x[1]"), Symbol("x[2]"),
+                                                   Symbol("x[4]"), :s])
+        # Same index twice.
+        @test_throws ErrorException from_chains(A, [Symbol("x[1]"), Symbol("x[1]"),
+                                                   Symbol("x[2]"), :s])
+        # Mixed dimensionality under one base name.
+        @test_throws ErrorException from_chains(A, [Symbol("x[1]"), Symbol("x[1,1]"),
+                                                   Symbol("x[2]"), :s])
+        # A name used both with and without an index.
+        @test_throws ErrorException from_chains(A, [:x, Symbol("x[1]"),
+                                                   Symbol("x[2]"), :s])
+        # Duplicated scalar name.
+        @test_throws ErrorException from_chains(A, [:x, :x, :y, :s])
+        # Only 1-based indices are supported.
+        @test_throws ErrorException from_chains(A, [Symbol("x[0]"), Symbol("x[1]"),
+                                                   Symbol("x[2]"), :s])
+
+        # rvars needs names, and needs per-element draws to regroup.
+        @test_throws ErrorException rvars(from_chains(A))
+        @test_throws ErrorException rvars(RVar(randn(10, 2, 3)))
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4
@@ -793,7 +884,7 @@ end
                           n_iter, n_var, n_chain)
             chn = MCMCChains.Chains(val, [:a, :b, :cc])
 
-            rd = RVar(chn)
+            rd = RVar(chn; flat=true)
             @test rd isa RVar{<:Any, 1}
             @test size(rd) == (n_var,)
             @test nchains(rd) == n_chain
@@ -805,16 +896,58 @@ end
             end
 
             # from_chains(::Chains) is the documented alias for the constructor.
-            @test draws(from_chains(chn)) == draws(rd)
+            @test draws(from_chains(chn; flat=true)) == draws(rd)
 
             # Parameter names come straight off the Chains object.
             @test variables(rd) == [:a, :b, :cc]
-            @test variables(from_chains(chn)) == [:a, :b, :cc]
+            @test variables(from_chains(chn; flat=true)) == [:a, :b, :cc]
 
             # Names line up with the right columns, so name lookup and position agree.
             for (j, nm) in enumerate([:a, :b, :cc])
                 @test draws(rd[nm]) == draws(rd)[:, j]
             end
+
+            # All-scalar parameters: the default result is one scalar RV per parameter.
+            p = RVar(chn)
+            @test p isa NamedTuple
+            @test keys(p) == (:a, :b, :cc)
+            for nm in (:a, :b, :cc)
+                @test p[nm] isa RVar{<:Any, 0}
+                @test draws(p[nm]) == draws(rd[nm])
+            end
+            @test keys(from_chains(chn)) == keys(p)
+            @test keys(rvars(chn)) == keys(p)
+        end
+
+        @testset "MCMCChains array parameters become N-d RVars" begin
+            # A model declaring x[trial, patient] reaches the chain as one flat column per
+            # element; extraction must hand back a 2-d RVar of the declared shape.
+            n_iter, n_chain, n_trial, n_patient = 3, 2, 2, 3
+            arr_names = [Symbol("x[$t,$pt]") for pt in 1:n_patient for t in 1:n_trial]
+            nms = [arr_names..., :sigma]
+            n_var = length(nms)
+            val = float([1000v + 100c + i for i in 1:n_iter, v in 1:n_var, c in 1:n_chain])
+            chn = MCMCChains.Chains(val, nms)
+
+            (; x, sigma) = RVar(chn)
+            @test x isa RVar{Float64, 2}
+            @test size(x) == (n_trial, n_patient)
+            @test sigma isa RVar{Float64, 0}
+            @test nchains(x) == n_chain
+            @test niterations(x) == n_iter
+
+            # The first trial and third patient is a scalar RV holding just that element's
+            # draws, in (iteration, chain) order.
+            e = x[1, 3]
+            @test e isa RVar{Float64, 0}
+            @test ndraws(e) == n_iter * n_chain
+            v_col = findfirst(isequal(Symbol("x[1,3]")), MCMCChains.names(chn))
+            @test draws(e) == vec([val[i, v_col, c] for i in 1:n_iter, c in 1:n_chain])
+
+            # Summaries over draws reduce to plain numbers of the parameter's shape.
+            @test mean(x) isa Matrix{Float64}
+            @test size(mean(x)) == (n_trial, n_patient)
+            @test mean(e) ≈ mean(draws(e))
         end
     else
         @info "MCMCChains not available; skipping extension tests (run via Pkg.test)"

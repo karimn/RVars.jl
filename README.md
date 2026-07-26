@@ -88,14 +88,46 @@ x .+ [1, 2, 3]    # RVar (vector RS + plain array)
 
 ## MCMCChains Integration
 
+Extracting a fit gives you one random variable per model parameter, keyed by name:
+
 ```julia
 using RVars, MCMCChains
 
 chn = Chains(rand(200, 4, 5), [:a, :b, :c, :d, :e])
-rd = RVar(chn)
-# or equivalently:
-from_chains(Array(chn))  # works without MCMCChains loaded
+p = RVar(chn)     # NamedTuple: (a = RVar{Float64,0}, b = ..., ...)
+p.a               # scalar RVar holding all 800 draws of :a
 ```
+
+### Array parameters keep their shape
+
+Samplers flatten an array-valued parameter into one entry per element (`x[1,1]`,
+`x[2,1]`, …). Those are reassembled into a random variable of the shape the model
+declared, so the draws stay hidden behind ordinary array syntax:
+
+```julia
+# a model with x[trial, patient] (2 trials × 3 patients) and a scalar sigma
+(; x, sigma) = RVar(chn)
+
+size(x)      # (2, 3) — a RVar{Float64,2}; the draws are on a hidden leading axis
+x[1, 3]      # RVar{Float64,0} — every draw for trial 1, patient 3
+mean(x)      # 2×3 Matrix{Float64} of posterior means
+x[1, 3] - x[2, 3]   # a RVar again: uncertainty propagates draw-by-draw
+```
+
+Indices must be complete and 1-based; a gap, a duplicate, or mixed dimensionality
+under one name is an error rather than a silently mangled array.
+
+Without `MCMCChains` loaded, the same regrouping works off a plain
+`(iterations, variables, chains)` array plus its parameter names:
+
+```julia
+from_chains(Array(chn), names(chn))            # NamedTuple, one entry per parameter
+from_chains(Array(chn))                        # unnamed: a single vector RVar of columns
+from_chains(Array(chn), names(chn); flat=true) # opt out: one named vector RVar
+```
+
+`flat=true` returns the ungrouped vector `RVar` whose elements are the flat columns,
+carrying the per-element names verbatim (read them with `variables(x)`).
 
 ## API
 
@@ -106,6 +138,12 @@ from_chains(Array(chn))  # works without MCMCChains loaded
 - `ndraws(x)` — total number of draws
 - `nchains(x)` — number of chains
 - `niterations(x)` — draws per chain
+
+### Parameter extraction
+
+- `RVar(chn)` / `from_chains(chn)` — a `NamedTuple` of one `RVar` per model parameter
+- `rvars(x)` / `rvars(array, param_names)` — regroup per-element draws into shaped `RVar`s
+- `variables(x)` — the parameter names carried by a vector `RVar`, or `nothing`
 
 ### Statistics over draws (returns plain array)
 
