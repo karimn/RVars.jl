@@ -128,24 +128,107 @@ p.xyz[1, 3]             # RVar{Float64, 0} — every draw for trial 1, patient 3
 (; xyz, sigma) = rvars(chn)
 ```
 """
-function rvars(x::RVar{T, 1}) where {T}
+function rvars(x::RVar{T, 1}; dims::NamedTuple=NamedTuple(),
+               labels::NamedTuple=NamedTuple()) where {T}
     nms = variables(x)
     nms === nothing && error("rvars needs parameter names, and this random variable has " *
                              "none; build it with from_chains(array, param_names) or from a Chains object")
     store = x.draws
     order, cols, locs = _group_param_names(nms)
-    vals = Any[_assemble_param(b, store, cols[b], locs[b], x.nchains) for b in order]
+
+    # Reject unknown keys rather than silently ignoring them — a typo'd parameter or
+    # dimension name would otherwise leave the axes quietly unnamed.
+    for k in keys(dims)
+        k in order || error("dims refers to :$k, which is not a parameter in this fit; " *
+                            "available: $(join(string.(order), ", "))")
+    end
+
+    # Unlike `dims`, extra keys in `labels` are fine: labels are keyed by dimension and a
+    # whole data frame's worth of levels (see `recover_types`) is a legitimate thing to
+    # pass, most of whose columns are not dimensions of this fit.
+    vals = Any[_attach_dims(_assemble_param(b, store, cols[b], locs[b], x.nchains),
+                            b, dims, labels) for b in order]
     return NamedTuple{(order...,)}((vals...,))
 end
 
-function rvars(x::RVar{T, N}) where {T, N}
+function rvars(x::RVar{T, N}; kwargs...) where {T, N}
     error("rvars expects a vector random variable of per-element parameter draws (N == 1), got N == $N")
 end
 
-function rvars(array::AbstractArray{<:Any, 3}, param_names::AbstractVector{Symbol})
-    return rvars(from_chains(array, param_names; flat=true))
+# Attach the dimension names declared for `base`, plus any labels registered for those
+# dimension names. Labels are keyed by dimension rather than by parameter, so :arm means
+# the same thing in every parameter that has an :arm axis and is declared once.
+function _attach_dims(v::RVar{T, M}, base::Symbol, dims::NamedTuple,
+                      labels::NamedTuple) where {T, M}
+    haskey(dims, base) || return v
+    spec = dims[base]
+    dn = spec isa Symbol ? (spec,) : Tuple(Symbol.(spec))
+    M == 0 && error("Parameter :$base is a scalar, so it has no dimensions to name")
+    length(dn) == M || error("Got $(length(dn)) dimension names for parameter :$base, " *
+                             "which has $M dimension(s): size $(size(v))")
+    dl = ntuple(d -> get(labels, dn[d], nothing), M)
+    for d in 1:M
+        labs = dl[d]
+        labs === nothing && continue
+        length(labs) == size(v, d) || error(
+            "Dimension :$(dn[d]) of parameter :$base has length $(size(v, d)), " *
+            "but $(length(labs)) labels were supplied")
+    end
+    dl_final = any(l -> l !== nothing, dl) ? dl : nothing
+    return RVar{T, M, typeof(v.draws)}(v.draws, v.nchains, nothing, dn, dl_final)
 end
 
-function rvars(array::AbstractArray{<:Any, 3}, param_names::AbstractVector{String})
-    return rvars(array, Symbol.(param_names))
+"""
+    recover_types(data; sorted=true)
+
+Derive dimension labels from the data the model was fitted to, in the spirit of
+tidybayes' `recover_types`. `data` is anything `pairs` yields `name => column` from — a
+`NamedTuple` of vectors, a `Dict`, or `eachcol(df)` for a `DataFrame`. Each column becomes
+one entry mapping the column's name to its distinct values, ready to pass as `labels`:
+
+```julia
+labs = recover_types((arm = ["control", "drug", "control"], site = ["a", "b", "a"]))
+# (arm = ["control", "drug"], site = ["a", "b"])
+
+p = rvars(chn; dims = (a = (:trial, :arm),), labels = labs)
+```
+
+Columns that are not dimensions of the fit are simply ignored, so passing a whole table is
+fine.
+
+!!! warning
+    The *order* of the recovered labels must match the integer coding the model used, and
+    that coding is not recorded in the fit. `sorted=true` (the default) sorts the distinct
+    values, matching how R factors and `CategoricalArray`s number their levels by default;
+    `sorted=false` keeps first-appearance order. If your model indexed some other way,
+    pass the labels explicitly rather than recovering them.
+"""
+function recover_types(data; sorted::Bool=true)
+    ks = Symbol[]
+    vs = Any[]
+    for (k, col) in pairs(data)
+        col isa AbstractVector || continue
+        # A continuous column is a measurement, not a dimension; every row would otherwise
+        # come back as its own "level".
+        eltype(col) <: AbstractFloat && continue
+        lv = unique(col)
+        if sorted
+            # Not everything is orderable; an unsortable column keeps appearance order.
+            try
+                lv = sort(lv)
+            catch
+            end
+        end
+        push!(ks, Symbol(k))
+        push!(vs, lv)
+    end
+    return NamedTuple{(ks...,)}((vs...,))
+end
+
+function rvars(array::AbstractArray{<:Any, 3}, param_names::AbstractVector{Symbol}; kwargs...)
+    return rvars(from_chains(array, param_names; flat=true); kwargs...)
+end
+
+function rvars(array::AbstractArray{<:Any, 3}, param_names::AbstractVector{String}; kwargs...)
+    return rvars(array, Symbol.(param_names); kwargs...)
 end

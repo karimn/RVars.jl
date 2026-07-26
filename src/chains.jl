@@ -30,14 +30,19 @@ function from_chains(array::AbstractArray{T, 3}) where {T}
 end
 
 function from_chains(array::AbstractArray{T, 3}, param_names::AbstractVector{Symbol};
-                     flat::Bool=false) where {T}
+                     flat::Bool=false, kwargs...) where {T}
     rd = from_chains(array)
     d = draws(rd)
     named = RVar{T, 1, typeof(d)}(d, nchains(rd), param_names)
-    return flat ? named : rvars(named)
+    if flat
+        isempty(kwargs) || error("dims/labels describe grouped parameters and cannot be " *
+                                 "combined with flat=true")
+        return named
+    end
+    return rvars(named; kwargs...)
 end
 
 function from_chains(array::AbstractArray{T, 3}, param_names::AbstractVector{String};
-                     flat::Bool=false) where {T}
-    from_chains(array, Symbol.(param_names); flat=flat)
+                     flat::Bool=false, kwargs...) where {T}
+    from_chains(array, Symbol.(param_names); flat=flat, kwargs...)
 end

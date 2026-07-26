@@ -63,6 +63,87 @@ function Base.getindex(x::RVar{T, 1}, S::AbstractVector{Symbol}) where {T}
     return x[[_name_index(x, s) for s in S]]
 end
 
+# Slicing with any mix of integers, colons and index vectors. Without this method Julia's
+# AbstractArray fallback would route through `similar`, which sees only a type and a shape
+# and so cannot carry dimension metadata; slicing the store directly keeps the axes that
+# survive (an Integer index drops its axis) along with their names and labels.
+const _SliceIndex = Union{Integer, Colon, AbstractVector}
+
+function Base.getindex(x::RVar{T, N}, I::Vararg{_SliceIndex, N}) where {T, N}
+    @boundscheck checkbounds(x, I...)
+    data = x.draws[:, I...]
+    M = ndims(data) - 1
+    dn, dl = _subset_dimmeta(x, I, M)
+    return RVar{T, M, typeof(data)}(data, x.nchains, nothing, dn, dl)
+end
+
+# Carry dimension names/labels across a slice: axis `d` survives unless indexed by a
+# scalar, and a surviving axis's labels are subset by the very index used on the data.
+function _subset_dimmeta(x::RVar{T, N}, I, M) where {T, N}
+    dn0, dl0 = x.dimnames, x.dimlabels
+    ((dn0 === nothing && dl0 === nothing) || M == 0) && return (nothing, nothing)
+    kept = Int[d for d in 1:N if !(I[d] isa Integer)]
+    length(kept) == M || return (nothing, nothing)
+    dn = dn0 === nothing ? nothing : ntuple(k -> dn0[kept[k]], M)
+    dl = dl0 === nothing ? nothing : ntuple(M) do k
+        labs = dl0[kept[k]]
+        labs === nothing ? nothing : labs[I[kept[k]]]
+    end
+    return (dn, dl)
+end
+
+"""
+    x[dim=index, ...]
+
+Index a random variable by dimension name. Each value may be a position, a label from that
+axis (see [`dimlabels`](@ref)), a vector of either, or `:` — dimensions left out default to
+`:`. Naming every dimension with a scalar yields a scalar `RVar`; leaving any as a slice
+yields a `RVar` of the surviving axes, which keep their names and labels.
+
+```julia
+a[trial=1, arm=:drug]   # scalar RVar
+a[arm=:drug]            # RVar over trials, with :arm dropped
+```
+"""
+function Base.getindex(x::RVar{T, N}; kwargs...) where {T, N}
+    isempty(kwargs) && return x
+    idx = Vector{Any}(undef, N)
+    fill!(idx, Colon())
+    for (k, v) in pairs(kwargs)
+        d = _dim_index(x, k)
+        idx[d] = _resolve_label(x, d, v)
+    end
+    return x[idx...]
+end
+
+# Turn a user-supplied index for axis `d` into a positional one. Integers and colons pass
+# straight through, so labelled axes can still be indexed by position; anything else is
+# looked up in that axis's labels. Symbol/String labels are matched across the two spellings
+# so `arm=:drug` works against `["control", "drug"]`.
+function _resolve_label(x::RVar, d::Int, v)
+    (v isa Colon || v isa Integer) && return v
+    if v isa AbstractVector
+        eltype(v) === Bool && return v
+        return [_resolve_label(x, d, vi) for vi in v]
+    end
+    nm = x.dimnames === nothing ? d : x.dimnames[d]
+    labs = x.dimlabels === nothing ? nothing : x.dimlabels[d]
+    labs === nothing && error(
+        "Dimension :$nm has no labels, so $(repr(v)) cannot be resolved; index it by position")
+    i = findfirst(isequal(v), labs)
+    if i === nothing && v isa Symbol
+        i = findfirst(l -> l isa AbstractString && l == String(v), labs)
+    end
+    if i === nothing && v isa AbstractString
+        i = findfirst(l -> l isa Symbol && String(l) == v, labs)
+    end
+    if i === nothing
+        avail = join(map(repr, labs), ", ")
+        error("Unknown label $(repr(v)) for dimension :$nm; available: $avail")
+    end
+    return i
+end
+
 function Base.setindex!(x::RVar{T, N}, val::Number, i::Int) where {T, N}
     @boundscheck checkbounds(x, i)
     _flat_store(x)[:, i] .= val
@@ -96,7 +177,7 @@ function Base.similar(x::RVar{T, N}, ::Type{S}, dims::Dims) where {T, N, S}
 end
 
 function Base.copy(x::RVar{T, N}) where {T, N}
-    RVar{T, N, typeof(x.draws)}(copy(x.draws), x.nchains, x.names)
+    RVar{T, N, typeof(x.draws)}(copy(x.draws), x.nchains, x.names, x.dimnames, x.dimlabels)
 end
 
 # `collect`, `Array` and `map` allocate `Array{eltype(x)}` up front and convert each
@@ -126,7 +207,8 @@ end
 # `==` is elementwise by design (src/arithmetic.jl), so it cannot answer "are these the
 # same random variable?". `isequal` does, and is what Dict and Set dispatch on.
 function Base.isequal(x::RVar, y::RVar)
-    return isequal(x.draws, y.draws) && x.nchains == y.nchains && isequal(x.names, y.names)
+    return isequal(x.draws, y.draws) && x.nchains == y.nchains && isequal(x.names, y.names) &&
+           isequal(x.dimnames, y.dimnames) && isequal(x.dimlabels, y.dimlabels)
 end
 
 # isequal must be total and Bool-returning. Without these, comparing against a plain array
@@ -138,7 +220,8 @@ Base.isequal(::AbstractArray, ::RVar) = false
 # Base's hash(::AbstractArray) hashes elements, and an element of a RVar is
 # another RVar — for N == 0 that is itself, so the generic method recurses until
 # the stack overflows. Hash the fields directly, matching what isequal compares.
-Base.hash(x::RVar, h::UInt) = hash(x.names, hash(x.nchains, hash(x.draws, hash(:RVar, h))))
+Base.hash(x::RVar, h::UInt) = hash(x.dimlabels, hash(x.dimnames,
+    hash(x.names, hash(x.nchains, hash(x.draws, hash(:RVar, h))))))
 
 function Base.show(io::IO, x::RVar{T, N}) where {T, N}
     nd = ndraws(x)
@@ -151,13 +234,20 @@ function Base.show(io::IO, x::RVar{T, N}) where {T, N}
             print(io, "\n[1] ", round(m; digits=2), " ± ", round(s; digits=2))
         end
     else
-        sz_str = join(size(x), ",")
+        # Name the axes in the header when known: [trial=2,arm=3] beats [2,3].
+        sz_str = if x.dimnames === nothing
+            join(size(x), ",")
+        else
+            join(("$(x.dimnames[d])=$(size(x, d))" for d in 1:N), ",")
+        end
         print(io, "RVar{$T}<$(nd),$(nc)>[$(sz_str)] mean ± sd:")
         n_show = min(length(x), 6)
         m_vals = Statistics.mean(x)
         s_vals = Statistics.std(x)
         if N == 1
-            nms = x.names
+            # Per-element names win; otherwise fall back to this axis's labels.
+            nms = x.names !== nothing ? x.names :
+                  (x.dimlabels === nothing ? nothing : x.dimlabels[1])
             for i in 1:n_show
                 lbl = nms === nothing ? string(i) : string(nms[i])
                 print(io, "\n[", lbl, "] ",
