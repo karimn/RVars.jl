@@ -117,14 +117,21 @@ x[1, 3] - x[2, 3]   # a RVar again: uncertainty propagates draw-by-draw
 Indices must be complete and 1-based; a gap, a duplicate, or mixed dimensionality
 under one name is an error rather than a silently mangled array.
 
-Without `MCMCChains` loaded, the same regrouping works off a plain
-`(iterations, variables, chains)` array plus its parameter names:
+The same regrouping works off a plain `(iterations, variables, chains)` array plus its
+parameter names, with no `MCMCChains` dependency:
 
 ```julia
-from_chains(Array(chn), names(chn))            # NamedTuple, one entry per parameter
-from_chains(Array(chn))                        # unnamed: a single vector RVar of columns
-from_chains(Array(chn), names(chn); flat=true) # opt out: one named vector RVar
+arr = randn(200, 7, 4)   # 200 iterations × 7 variables × 4 chains
+pnames = [Symbol("x[1,1]"), Symbol("x[2,1]"), Symbol("x[1,2]"),
+          Symbol("x[2,2]"), Symbol("x[1,3]"), Symbol("x[2,3]"), :sigma]
+
+from_chains(arr, pnames)             # NamedTuple: (x = RVar{Float64,2}, sigma = ...)
+from_chains(arr)                     # unnamed: a single vector RVar, one element per column
+from_chains(arr, pnames; flat=true)  # opt out of grouping: one named vector RVar
 ```
+
+(To get such an array out of a `Chains` object, reach for `Array(chn.value)` — plain
+`Array(chn)` flattens iterations and chains together into a matrix.)
 
 `flat=true` returns the ungrouped vector `RVar` whose elements are the flat columns,
 carrying the per-element names verbatim (read them with `variables(x)`).
