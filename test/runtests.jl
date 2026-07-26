@@ -178,13 +178,19 @@ end
         @test nchains(rd) == 4
         @test niterations(rd) == 200
 
+        # With names, the default is one random variable per model parameter.
         rd2 = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp])
-        @test rd2 isa RVar
-        @test variables(rd2) == [:mu, :sigma, :alpha, :beta, :lp]
+        @test rd2 isa NamedTuple
+        @test keys(rd2) == (:mu, :sigma, :alpha, :beta, :lp)
+        @test all(v -> v isa RVar{Float64, 0}, values(rd2))
 
         rd3 = from_chains(data, ["mu", "sigma", "alpha", "beta", "lp"])
-        @test rd3 isa RVar
-        @test variables(rd3) == [:mu, :sigma, :alpha, :beta, :lp]
+        @test keys(rd3) == (:mu, :sigma, :alpha, :beta, :lp)
+
+        # flat=true keeps the ungrouped named vector RVar.
+        rd4 = from_chains(data, [:mu, :sigma, :alpha, :beta, :lp]; flat=true)
+        @test rd4 isa RVar{Float64, 1}
+        @test variables(rd4) == [:mu, :sigma, :alpha, :beta, :lp]
     end
 
     @testset "Matrix multiplication" begin
@@ -580,15 +586,16 @@ end
     end
 
     @testset "Attaching names" begin
-        # from_chains attaches names to the value itself, not alongside it.
+        # from_chains(...; flat=true) attaches names to the value itself, not alongside it.
         A = [100c + 10v + i for i in 1:2, v in 1:3, c in 1:4]
-        rd = from_chains(A, [:alpha, :beta, :gamma])
+        rd = from_chains(A, [:alpha, :beta, :gamma]; flat=true)
         @test variables(rd) == [:alpha, :beta, :gamma]
         @test nchains(rd) == 4
         # Attaching names must not disturb the draws layout.
         @test draws(rd) == draws(from_chains(A))
 
         # Wrong number of names is rejected.
+        @test_throws ErrorException from_chains(A, [:alpha, :beta]; flat=true)
         @test_throws ErrorException from_chains(A, [:alpha, :beta])
 
         # The RVar constructor takes a names kwarg.
@@ -786,6 +793,226 @@ end
         @test_throws DimensionMismatch x .+ [1.0, 2.0]
     end
 
+    @testset "rvars regroups flattened array parameters" begin
+        # A[i, v, c] carries a distinguishable value per (iteration, variable, chain), so a
+        # misplaced element cannot coincide with the right one.
+        n_iter, n_chain = 2, 4
+        nms = [:sigma,
+               Symbol("x[1,1]"), Symbol("x[2,1]"), Symbol("x[1,2]"),
+               Symbol("x[2,2]"), Symbol("x[1,3]"), Symbol("x[2,3]"),
+               Symbol("b[1]"), Symbol("b[2]")]
+        A = float([1000v + 100c + i for i in 1:n_iter, v in 1:length(nms), c in 1:n_chain])
+
+        p = from_chains(A, nms)
+        @test p isa NamedTuple
+        @test keys(p) == (:sigma, :x, :b)
+
+        # A scalar parameter stays a scalar RV; shapes come from the parsed indices.
+        @test p.sigma isa RVar{Float64, 0}
+        @test p.x isa RVar{Float64, 2}
+        @test size(p.x) == (2, 3)
+        @test p.b isa RVar{Float64, 1}
+        @test size(p.b) == (2,)
+
+        # Indexing the reassembled array parameter gives a scalar RV over all draws.
+        @test p.x[1, 3] isa RVar{Float64, 0}
+        @test ndraws(p.x[1, 3]) == n_iter * n_chain
+
+        # Chain bookkeeping survives the regrouping.
+        for v in values(p)
+            @test nchains(v) == n_chain
+            @test niterations(v) == n_iter
+            @test ndraws(v) == n_iter * n_chain
+        end
+
+        # Every element must hold exactly the draws of its own flat column.
+        flat = from_chains(A, nms; flat=true)
+        @test draws(p.sigma) == draws(flat[:sigma])
+        for t in 1:2, pat in 1:3
+            @test draws(p.x[t, pat]) == draws(flat[Symbol("x[$t,$pat]")])
+        end
+        for k in 1:2
+            @test draws(p.b[k]) == draws(flat[Symbol("b[$k]")])
+        end
+
+        # Placement is by parsed index, not by column order: shuffling the names must
+        # permute the columns and leave the assembled parameter identical.
+        perm = [1, 7, 3, 5, 2, 6, 4, 9, 8]
+        q = from_chains(A[:, perm, :], nms[perm])
+        @test keys(q) == (:sigma, :x, :b)
+        @test draws(q.x) == draws(p.x)
+        @test draws(q.b) == draws(p.b)
+
+        # Names without a bracketed integer index are left alone as scalars.
+        odd = [:sigma, Symbol("x[a]"), Symbol("x[1]")]
+        r = from_chains(A[:, 1:3, :], odd)
+        @test keys(r) == (:sigma, Symbol("x[a]"), :x)
+        @test r.x isa RVar{Float64, 1}
+        @test size(r.x) == (1,)
+    end
+
+    @testset "rvars rejects malformed parameter names" begin
+        A = float([1000v + 100c + i for i in 1:2, v in 1:4, c in 1:4])
+
+        # A gap in the index range would silently produce garbage elements.
+        @test_throws ErrorException from_chains(A, [Symbol("x[1]"), Symbol("x[2]"),
+                                                   Symbol("x[4]"), :s])
+        # Same index twice.
+        @test_throws ErrorException from_chains(A, [Symbol("x[1]"), Symbol("x[1]"),
+                                                   Symbol("x[2]"), :s])
+        # Mixed dimensionality under one base name.
+        @test_throws ErrorException from_chains(A, [Symbol("x[1]"), Symbol("x[1,1]"),
+                                                   Symbol("x[2]"), :s])
+        # A name used both with and without an index.
+        @test_throws ErrorException from_chains(A, [:x, Symbol("x[1]"),
+                                                   Symbol("x[2]"), :s])
+        # Duplicated scalar name.
+        @test_throws ErrorException from_chains(A, [:x, :x, :y, :s])
+        # Only 1-based indices are supported.
+        @test_throws ErrorException from_chains(A, [Symbol("x[0]"), Symbol("x[1]"),
+                                                   Symbol("x[2]"), :s])
+
+        # rvars needs names, and needs per-element draws to regroup.
+        @test_throws ErrorException rvars(from_chains(A))
+        @test_throws ErrorException rvars(RVar(randn(10, 2, 3)))
+    end
+
+    @testset "Dimension names and labels" begin
+        # a[trial, arm] with 2 trials and 3 arms, plus a scalar.
+        n_trial, n_arm = 2, 3
+        nms = [[Symbol("a[$i,$j]") for j in 1:n_arm for i in 1:n_trial]..., :s]
+        A = float([1000v + 100c + i for i in 1:2, v in 1:length(nms), c in 1:4])
+        arms = ["control", "drug", "placebo"]
+
+        p = rvars(A, nms; dims=(a=(:trial, :arm),), labels=(arm=arms,))
+        @test dimnames(p.a) == (:trial, :arm)
+        @test dimlabels(p.a) == (nothing, arms)
+        @test dimlabels(p.a, :arm) == arms
+        @test dimlabels(p.a, 2) == arms
+        @test dimlabels(p.a, :trial) === nothing
+        # Undeclared parameters stay unnamed.
+        @test dimnames(p.s) === nothing
+
+        # Label lookup resolves to the same element as the positional index, and accepts
+        # either spelling of a string/symbol label.
+        @test draws(p.a[trial=1, arm=:drug]) == draws(p.a[1, 2])
+        @test draws(p.a[trial=1, arm="drug"]) == draws(p.a[1, 2])
+        @test p.a[trial=1, arm=:drug] isa RVar{Float64, 0}
+        # Positions still work on a labelled axis.
+        @test draws(p.a[trial=1, arm=2]) == draws(p.a[1, 2])
+
+        # A partially indexed RVar keeps the surviving axes, names and labels.
+        sl = p.a[arm=:drug]
+        @test sl isa RVar{Float64, 1}
+        @test size(sl) == (n_trial,)
+        @test dimnames(sl) == (:trial,)
+        @test draws(sl) == draws(p.a[:, 2])
+
+        vsl = p.a[arm=["drug", "placebo"]]
+        @test size(vsl) == (n_trial, 2)
+        @test dimnames(vsl) == (:trial, :arm)
+        @test dimlabels(vsl) == (nothing, ["drug", "placebo"])
+
+        # Positional slicing carries metadata too, dropping scalar-indexed axes.
+        @test dimnames(p.a[:, 2]) == (:trial,)
+        @test dimnames(p.a[1, :]) == (:arm,)
+        @test dimlabels(p.a[1, :]) == (arms,)
+        @test dimnames(p.a[1, 2]) === nothing   # scalar RV has no axes
+
+        # Metadata survives shape-preserving arithmetic, and a metadata-free operand
+        # (here a scalar RV) defers rather than forcing it to be dropped.
+        for y in (p.a .+ 1, p.a .* 2, -p.a, sin.(p.a), copy(p.a), p.a - p.a, p.a .+ p.s)
+            @test dimnames(y) == (:trial, :arm)
+        end
+        @test dimlabels(p.a .+ 1) == (nothing, arms)
+        # Rank-changing operations drop them rather than keeping stale names.
+        @test dimnames(reshape(p.a, (6,))) === nothing
+        @test dimnames(rs_mean(p.a)) === nothing
+
+        # isequal accounts for dimension metadata.
+        plain = rvars(A, nms).a
+        @test !isequal(p.a, plain)
+        @test isequal(p.a, rvars(A, nms; dims=(a=(:trial, :arm),), labels=(arm=arms,)).a)
+
+        # show reports named axes and uses labels for element rows.
+        @test occursin("trial=2,arm=3", sprint(show, p.a))
+        @test occursin("[control]", sprint(show, p.a[trial=1]))
+
+        # 3-d parameters and dimension-keyed label sharing.
+        nms3 = [Symbol("b[$i,$j,$k]") for k in 1:2 for j in 1:n_arm for i in 1:n_trial]
+        A3 = float([1000v + 100c + i for i in 1:2, v in 1:length(nms3), c in 1:4])
+        q = rvars(A3, nms3; dims=(b=(:trial, :arm, :time),), labels=(arm=arms,))
+        @test dimnames(q.b) == (:trial, :arm, :time)
+        @test dimlabels(q.b) == (nothing, arms, nothing)
+        @test dimnames(q.b[time=1, arm=:control]) == (:trial,)
+
+        # A single Symbol is accepted for a 1-d parameter.
+        nms1 = [Symbol("v[$i]") for i in 1:3]
+        A1 = float([1000v + 100c + i for i in 1:2, v in 1:3, c in 1:4])
+        r = rvars(A1, nms1; dims=(v=:site,), labels=(site=["x", "y", "z"],))
+        @test dimnames(r.v) == (:site,)
+        @test draws(r.v[site="y"]) == draws(r.v[2])
+    end
+
+    @testset "Dimension metadata rejects bad specs" begin
+        n_trial, n_arm = 2, 3
+        nms = [[Symbol("a[$i,$j]") for j in 1:n_arm for i in 1:n_trial]..., :s]
+        A = float([1000v + 100c + i for i in 1:2, v in 1:length(nms), c in 1:4])
+        arms = ["control", "drug", "placebo"]
+        p = rvars(A, nms; dims=(a=(:trial, :arm),), labels=(arm=arms,))
+
+        # Wrong number of dimension names for the parameter's rank.
+        @test_throws ErrorException rvars(A, nms; dims=(a=(:trial,),))
+        @test_throws ErrorException rvars(A, nms; dims=(a=(:t, :u, :v),))
+        # Dimension names must be unique.
+        @test_throws ErrorException rvars(A, nms; dims=(a=(:trial, :trial),))
+        # Naming the dimensions of a scalar parameter.
+        @test_throws ErrorException rvars(A, nms; dims=(s=(:x,),))
+        # A parameter that isn't in the fit is a typo, not a no-op.
+        @test_throws ErrorException rvars(A, nms; dims=(aa=(:trial, :arm),))
+        # Label vector must be as long as its axis, and unique.
+        @test_throws ErrorException rvars(A, nms; dims=(a=(:trial, :arm),),
+                                          labels=(arm=["x", "y"],))
+        @test_throws ErrorException rvars(A, nms; dims=(a=(:trial, :arm),),
+                                          labels=(arm=["x", "x", "y"],))
+        # Labels for columns that are not dimensions are ignored, not an error.
+        @test dimnames(rvars(A, nms; dims=(a=(:trial, :arm),),
+                             labels=(arm=arms, unrelated=[1, 2])).a) == (:trial, :arm)
+
+        # Unknown dimension name / unknown label at index time.
+        @test_throws ErrorException p.a[patient=1]
+        @test_throws ErrorException p.a[arm=:sham]
+        # An unlabelled axis cannot resolve a label.
+        @test_throws ErrorException p.a[trial=:first]
+        # Dimension-name indexing needs dimension names.
+        @test_throws ErrorException rvars(A, nms).a[trial=1]
+        # dims/labels are meaningless for the flat representation.
+        @test_throws ErrorException from_chains(A, nms; flat=true, dims=(a=(:trial, :arm),))
+    end
+
+    @testset "recover_types" begin
+        data = (patient = [2, 1, 3, 1],
+                arm     = ["drug", "control", "drug", "control"],
+                y       = [0.5, 1.5, 2.5, 3.5])
+
+        labs = recover_types(data)
+        # Sorted by default, matching how R factors and CategoricalArrays number levels.
+        @test labs.arm == ["control", "drug"]
+        @test labs.patient == [1, 2, 3]
+        # A continuous column is a measurement, not a dimension.
+        @test !haskey(labs, :y)
+
+        @test recover_types(data; sorted=false).arm == ["drug", "control"]
+
+        # Feeds straight into rvars, ignoring columns that aren't dimensions.
+        nms = [Symbol("a[$i,$j]") for j in 1:2 for i in 1:3]
+        A = float([1000v + 100c + i for i in 1:2, v in 1:6, c in 1:4])
+        p = rvars(A, nms; dims=(a=(:patient, :arm),), labels=labs)
+        @test dimnames(p.a) == (:patient, :arm)
+        @test dimlabels(p.a) == ([1, 2, 3], ["control", "drug"])
+        @test draws(p.a[patient=3, arm="drug"]) == draws(p.a[3, 2])
+    end
+
     if HAS_MCMCCHAINS
         @testset "MCMCChains extension value correctness (H7)" begin
             n_iter, n_var, n_chain = 2, 3, 4
@@ -793,7 +1020,7 @@ end
                           n_iter, n_var, n_chain)
             chn = MCMCChains.Chains(val, [:a, :b, :cc])
 
-            rd = RVar(chn)
+            rd = RVar(chn; flat=true)
             @test rd isa RVar{<:Any, 1}
             @test size(rd) == (n_var,)
             @test nchains(rd) == n_chain
@@ -805,16 +1032,87 @@ end
             end
 
             # from_chains(::Chains) is the documented alias for the constructor.
-            @test draws(from_chains(chn)) == draws(rd)
+            @test draws(from_chains(chn; flat=true)) == draws(rd)
 
             # Parameter names come straight off the Chains object.
             @test variables(rd) == [:a, :b, :cc]
-            @test variables(from_chains(chn)) == [:a, :b, :cc]
+            @test variables(from_chains(chn; flat=true)) == [:a, :b, :cc]
 
             # Names line up with the right columns, so name lookup and position agree.
             for (j, nm) in enumerate([:a, :b, :cc])
                 @test draws(rd[nm]) == draws(rd)[:, j]
             end
+
+            # All-scalar parameters: the default result is one scalar RV per parameter.
+            p = RVar(chn)
+            @test p isa NamedTuple
+            @test keys(p) == (:a, :b, :cc)
+            for nm in (:a, :b, :cc)
+                @test p[nm] isa RVar{<:Any, 0}
+                @test draws(p[nm]) == draws(rd[nm])
+            end
+            @test keys(from_chains(chn)) == keys(p)
+            @test keys(rvars(chn)) == keys(p)
+        end
+
+        @testset "MCMCChains array parameters become N-d RVars" begin
+            # A model declaring x[trial, patient] reaches the chain as one flat column per
+            # element; extraction must hand back a 2-d RVar of the declared shape.
+            n_iter, n_chain, n_trial, n_patient = 3, 2, 2, 3
+            arr_names = [Symbol("x[$t,$pt]") for pt in 1:n_patient for t in 1:n_trial]
+            nms = [arr_names..., :sigma]
+            n_var = length(nms)
+            val = float([1000v + 100c + i for i in 1:n_iter, v in 1:n_var, c in 1:n_chain])
+            chn = MCMCChains.Chains(val, nms)
+
+            # Rank and shape are what extraction promises; the element type is whatever
+            # MCMCChains stored (it may be a Union{Missing, Float64}), so don't pin it.
+            (; x, sigma) = RVar(chn)
+            @test x isa RVar{<:Any, 2}
+            @test size(x) == (n_trial, n_patient)
+            @test sigma isa RVar{<:Any, 0}
+            @test nchains(x) == n_chain
+            @test niterations(x) == n_iter
+
+            # The first trial and third patient is a scalar RV holding just that element's
+            # draws, in (iteration, chain) order.
+            e = x[1, 3]
+            @test e isa RVar{<:Any, 0}
+            @test ndraws(e) == n_iter * n_chain
+            v_col = findfirst(isequal(Symbol("x[1,3]")), MCMCChains.names(chn))
+            @test draws(e) == vec([val[i, v_col, c] for i in 1:n_iter, c in 1:n_chain])
+
+            # Summaries over draws reduce to plain numbers of the parameter's shape.
+            @test mean(x) isa AbstractMatrix
+            @test size(mean(x)) == (n_trial, n_patient)
+            @test mean(e) ≈ mean(draws(e))
+        end
+
+        @testset "MCMCChains dimension names and labels" begin
+            n_iter, n_chain, n_trial, n_arm = 20, 2, 2, 3
+            nms = [[Symbol("a[$i,$j]") for j in 1:n_arm for i in 1:n_trial]...,
+                   [Symbol("b[$i,$j,$k]") for k in 1:2 for j in 1:n_arm for i in 1:n_trial]...,
+                   :sigma]
+            val = randn(n_iter, length(nms), n_chain)
+            chn = MCMCChains.Chains(val, nms)
+            arms = ["control", "drug", "placebo"]
+
+            p = RVar(chn; dims=(a=(:trial, :arm), b=(:trial, :arm, :time)),
+                          labels=(arm=arms,))
+            @test dimnames(p.a) == (:trial, :arm)
+            @test dimnames(p.b) == (:trial, :arm, :time)
+            # The same dimension is declared once and applies to every parameter using it.
+            @test dimlabels(p.a, :arm) == arms
+            @test dimlabels(p.b, :arm) == arms
+            @test dimnames(p.sigma) === nothing
+
+            @test draws(p.a[trial=2, arm=:placebo]) == draws(p.a[2, 3])
+            @test dimnames(p.b[time=1]) == (:trial, :arm)
+            @test nchains(p.b[arm=:drug]) == n_chain
+
+            # rvars(::Chains) and from_chains(::Chains) take the same keywords.
+            @test dimnames(rvars(chn; dims=(a=(:trial, :arm),)).a) == (:trial, :arm)
+            @test dimnames(from_chains(chn; dims=(a=(:trial, :arm),)).a) == (:trial, :arm)
         end
     else
         @info "MCMCChains not available; skipping extension tests (run via Pkg.test)"

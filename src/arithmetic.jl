@@ -1,13 +1,13 @@
 function _binop_scalar(f::Function, x::RVar, y::Number)
     d = draws(x)
     result = f.(d, y)
-    _maybe_names(RVar(result, nchains=nchains(x)), x.names)
+    _maybe_names(RVar(result, nchains=nchains(x)), x.names, x.dimnames, x.dimlabels)
 end
 
 function _binop_scalar(f::Function, x::Number, y::RVar)
     d = draws(y)
     result = f.(x, d)
-    _maybe_names(RVar(result, nchains=nchains(y)), y.names)
+    _maybe_names(RVar(result, nchains=nchains(y)), y.names, y.dimnames, y.dimlabels)
 end
 
 function _binop_rv(f::Function, x::RVar, y::RVar)
@@ -27,7 +27,8 @@ function _binop_rv(f::Function, x::RVar, y::RVar)
         end
     end
     result = f.(dx, dy)
-    _maybe_names(RVar(result, nchains=_combine_nchains(x, y)), _combine_names(x, y))
+    _maybe_names(RVar(result, nchains=_combine_nchains(x, y)), _combine_names(x, y),
+                 _combine_dimmeta(x, y)...)
 end
 
 Base.:+(x::RVar, y::RVar) = _binop_rv(+, x, y)
@@ -86,8 +87,10 @@ Base.:>=(x::RVar, y::RVar) = _binop_rv(>=, x, y)
 Base.:>=(x::RVar, y::Number) = _binop_scalar(>=, x, y)
 Base.:>=(x::Number, y::RVar) = _binop_scalar(>=, x, y)
 
-Base.:!(x::RVar) = _maybe_names(RVar(.!(draws(x)), nchains=nchains(x)), x.names)
-Base.:-(x::RVar) = _maybe_names(RVar(-(draws(x)), nchains=nchains(x)), x.names)
+Base.:!(x::RVar) = _maybe_names(RVar(.!(draws(x)), nchains=nchains(x)), x.names,
+                                x.dimnames, x.dimlabels)
+Base.:-(x::RVar) = _maybe_names(RVar(-(draws(x)), nchains=nchains(x)), x.names,
+                                x.dimnames, x.dimlabels)
 
 for f in [:sin, :cos, :tan, :asin, :acos, :atan, :sinh, :cosh, :tanh,
           :asinh, :acosh, :atanh,
@@ -95,7 +98,8 @@ for f in [:sin, :cos, :tan, :asin, :acos, :atan, :sinh, :cosh, :tanh,
           :abs, :sign, :floor, :ceil, :trunc, :round]
     @eval begin
         Base.$f(x::RVar) =
-            _maybe_names(RVar($f.(draws(x)), nchains=nchains(x)), x.names)
+            _maybe_names(RVar($f.(draws(x)), nchains=nchains(x)), x.names,
+                         x.dimnames, x.dimlabels)
     end
 end
 

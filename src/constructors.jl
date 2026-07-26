@@ -28,6 +28,54 @@ variables (`N == 1`) can carry names; see [`from_chains`](@ref).
 variables(x::RVar) = x.names
 
 """
+    dimnames(x)
+
+The names of `x`'s dimensions as an `N`-tuple of `Symbol`s, or `nothing` if it has none.
+
+Unlike [`variables`](@ref), which names one *element* of a vector random variable, these
+name the *axes*: a parameter declared `a[trial, patient]` can carry `(:trial, :patient)`.
+Supply them when extracting from a fit — see [`rvars`](@ref) — since a chain records only
+`a[1,2]` and not what those positions mean.
+"""
+dimnames(x::RVar) = x.dimnames
+
+"""
+    dimlabels(x)
+    dimlabels(x, dim)
+
+The labels along each of `x`'s dimensions, as an `N`-tuple whose entries are either a
+vector of labels or `nothing` for an unlabelled axis. Returns `nothing` if `x` carries no
+labels at all.
+
+Labels are what let an axis be `["control", "drug"]` rather than `1:2`, so
+`x[arm=:drug]` and printed output can speak in the model's own terms. The second form
+takes a dimension name (or position) and returns just that axis's labels.
+"""
+dimlabels(x::RVar) = x.dimlabels
+
+function dimlabels(x::RVar, dim::Symbol)
+    d = _dim_index(x, dim)
+    return x.dimlabels === nothing ? nothing : x.dimlabels[d]
+end
+
+function dimlabels(x::RVar, dim::Integer)
+    1 <= dim <= ndims(x) || throw(BoundsError(x, dim))
+    return x.dimlabels === nothing ? nothing : x.dimlabels[dim]
+end
+
+# Resolve a dimension name to its axis position.
+function _dim_index(x::RVar, dim::Symbol)
+    dn = x.dimnames
+    dn === nothing && error("This RVar has no dimension names; supply them with rvars(...; dims=...)")
+    d = findfirst(isequal(dim), dn)
+    if d === nothing
+        avail = join(string.(dn), ", ")
+        error("Unknown dimension :$dim; available: $avail")
+    end
+    return d
+end
+
+"""
     draws(x; with_chains=false)
 
 The raw draws backing `x`. With `with_chains=false` (default) this is the stored
@@ -65,9 +113,16 @@ data (an explicit `nchains` is ignored, with a warning).
 
 Pass `names` (a vector of `Symbol`s) to label the elements of a vector random variable;
 this is only valid when the result has `N == 1`.
+
+Pass `dimnames` (a tuple of `Symbol`s, one per visible axis) to name the dimensions, and
+`dimlabels` (a tuple with one entry per axis, each either a vector of labels as long as
+that axis or `nothing`) to label the positions along them. See [`dimnames`](@ref) and
+[`dimlabels`](@ref).
 """
 function RVar(x::AbstractArray{T}; nchains::Int=1, with_chains::Bool=false,
-                    names::Union{Nothing, AbstractVector{Symbol}}=nothing) where {T}
+                    names::Union{Nothing, AbstractVector{Symbol}}=nothing,
+                    dimnames::Union{Nothing, Tuple{Vararg{Symbol}}}=nothing,
+                    dimlabels::Union{Nothing, Tuple{Vararg{Union{Nothing, AbstractVector}}}}=nothing) where {T}
     if with_chains
         if nchains != 1
             @warn "with_chains=true derives nchains from the data; ignoring nchains=$nchains"
@@ -79,15 +134,15 @@ function RVar(x::AbstractArray{T}; nchains::Int=1, with_chains::Bool=false,
         new_sz = (n_iter * n_chain, rest...)
         reshaped = reshape(x, new_sz)
         n_out = length(rest)
-        return RVar{T, n_out, typeof(reshaped)}(reshaped, n_chain, names)
+        return RVar{T, n_out, typeof(reshaped)}(reshaped, n_chain, names, dimnames, dimlabels)
     end
     if ndims(x) == 1
         # A flat vector is a scalar RV whose draws are the whole vector; honor nchains.
-        return RVar{T, 0, typeof(x)}(x, nchains, names)
+        return RVar{T, 0, typeof(x)}(x, nchains, names, dimnames, dimlabels)
     end
     sz = size(x)
     n_out = length(sz) - 1
-    return RVar{T, n_out, typeof(x)}(x, nchains, names)
+    return RVar{T, n_out, typeof(x)}(x, nchains, names, dimnames, dimlabels)
 end
 
 function RVar(x::RVar)

@@ -28,6 +28,16 @@ A vector random variable (`N == 1`) may additionally carry parameter names; see
 [`variables`](@ref) and [`from_chains`](@ref). Names are dropped by any operation that
 does not preserve elementwise identity.
 
+A random variable of any rank may carry **dimension metadata**: one name per axis
+([`dimnames`](@ref)) and, optionally, a vector of labels along each axis
+([`dimlabels`](@ref)). These describe the *axes*, where `names` describes the *elements*,
+so a parameter declared `a[trial, arm]` can report `(:trial, :arm)` with `:arm` running
+over `["control", "drug"]` and be indexed as `a[trial=1, arm=:drug]`. A chain records only
+`a[1,2]`, so this is supplied at extraction — see [`rvars`](@ref). Dimension metadata
+survives slicing (a scalar-indexed axis drops out, and a sliced axis's labels are subset
+along with it) and shape-preserving arithmetic; it is dropped by anything that changes the
+rank, and by combining two random variables that describe their axes differently.
+
 # Deviations from the `AbstractArray` contract
 
 `RVar` subtypes `AbstractArray` to reuse Julia's indexing and `similar` plumbing,
@@ -47,9 +57,13 @@ struct RVar{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
     draws::A
     nchains::Int
     names::Union{Nothing, Vector{Symbol}}
+    dimnames::Union{Nothing, NTuple{N, Symbol}}
+    dimlabels::Union{Nothing, NTuple{N, Union{Nothing, Vector}}}
 
     function RVar{T, N, A}(draws::A, nchains::Int=1,
-                                 names::Union{Nothing, AbstractVector{Symbol}}=nothing
+                                 names::Union{Nothing, AbstractVector{Symbol}}=nothing,
+                                 dimnames::Union{Nothing, Tuple{Vararg{Symbol}}}=nothing,
+                                 dimlabels::Union{Nothing, Tuple{Vararg{Union{Nothing, AbstractVector}}}}=nothing
                                  ) where {T, N, A <: AbstractArray{T}}
         nchains >= 1 || error("nchains must be >= 1")
         nd = size(draws, 1)
@@ -68,7 +82,32 @@ struct RVar{T, N, A <: AbstractArray{T}} <: AbstractArray{T, N}
             length(names) == size(draws, 2) ||
                 error("Got $(length(names)) names for a length-$(size(draws, 2)) random variable")
         end
-        new{T, N, A}(draws, nchains, names === nothing ? nothing : collect(Symbol, names))
+        if dimnames !== nothing
+            # One name per *axis*, unlike `names` which is one per element.
+            length(dimnames) == N ||
+                error("Got $(length(dimnames)) dimension names for a $N-dimensional random variable")
+            allunique(dimnames) ||
+                error("Dimension names must be unique, got $(dimnames)")
+        end
+        if dimlabels !== nothing
+            # One optional label vector per axis, each as long as that axis. Labels are what
+            # let :arm mean "control"/"drug" rather than 1/2, so a length mismatch is an
+            # error here rather than a mislabeled axis discovered at plotting time.
+            length(dimlabels) == N ||
+                error("Got $(length(dimlabels)) label vectors for a $N-dimensional random variable")
+            for (d, labs) in enumerate(dimlabels)
+                labs === nothing && continue
+                len = size(draws, d + 1)
+                length(labs) == len || error(
+                    "Got $(length(labs)) labels for axis $d, which has length $len")
+                allunique(labs) || error("Labels for axis $d must be unique, got $(labs)")
+            end
+        end
+        new{T, N, A}(draws, nchains, names === nothing ? nothing : collect(Symbol, names),
+                     dimnames === nothing ? nothing : NTuple{N, Symbol}(dimnames),
+                     dimlabels === nothing ? nothing :
+                         NTuple{N, Union{Nothing, Vector}}(map(l -> l === nothing ? nothing : collect(l),
+                                                               dimlabels)))
     end
 end
 
@@ -172,10 +211,49 @@ function _combine_names(operands...)
     return seen ? nms : const_nms
 end
 
+# Combine dimension metadata (axis names and axis labels) across operands of an
+# elementwise/broadcast operation. Unlike `names`, an operand carrying no metadata is not
+# evidence of disagreement — it simply has nothing to say, so `a .+ sigma` keeps a's axes.
+# Only two operands that both describe their axes, differently, force the result to drop
+# them. Returns a (dimnames, dimlabels) pair.
+function _combine_dimmeta(operands...)
+    dn = nothing
+    dl = nothing
+    dn_conflict = false
+    dl_conflict = false
+    for x in operands
+        x isa RVar || continue
+        if x.dimnames !== nothing
+            if dn === nothing
+                dn = x.dimnames
+            elseif !isequal(dn, x.dimnames)
+                dn_conflict = true
+            end
+        end
+        if x.dimlabels !== nothing
+            if dl === nothing
+                dl = x.dimlabels
+            elseif !isequal(dl, x.dimlabels)
+                dl_conflict = true
+            end
+        end
+    end
+    return (dn_conflict ? nothing : dn, dl_conflict ? nothing : dl)
+end
+
 # Attach `nms` to `x` only where it still describes the result elementwise. Broadcasting
 # can change both rank and length (a named length-3 vector RV times a 3x2 matrix RV gives
-# an N=2 result), and stale names are worse than none.
-function _maybe_names(x::RVar{T, N}, nms) where {T, N}
-    (nms === nothing || N != 1 || length(nms) != length(x)) && return x
-    return RVar{T, N, typeof(x.draws)}(x.draws, x.nchains, nms)
+# an N=2 result), and stale names are worse than none. Dimension names and labels are held
+# to the same standard: each is kept only while it still matches the result's rank, and
+# labels additionally only while every labelled axis still has its original length.
+function _maybe_names(x::RVar{T, N}, nms, dn=nothing, dl=nothing) where {T, N}
+    keep_nms = !(nms === nothing || N != 1 || length(nms) != length(x))
+    keep_dn = dn !== nothing && length(dn) == N
+    keep_dl = dl !== nothing && length(dl) == N &&
+              all(d -> dl[d] === nothing || length(dl[d]) == size(x, d), 1:N)
+    (keep_nms || keep_dn || keep_dl) || return x
+    return RVar{T, N, typeof(x.draws)}(x.draws, x.nchains,
+                                       keep_nms ? nms : nothing,
+                                       keep_dn ? dn : nothing,
+                                       keep_dl ? dl : nothing)
 end

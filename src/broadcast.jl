@@ -61,7 +61,8 @@ function Base.similar(bc::Base.Broadcast.Broadcasted{RVarStyle{N}}, ::Type{T}) w
     nc = _combine_nchains(bcf.args...)
     sz = (n_draws, length.(axs)...)
     data = similar(src_draws, T, sz)
-    return _maybe_names(RVar{T, N, typeof(data)}(data, nc), _combine_names(bcf.args...))
+    return _maybe_names(RVar{T, N, typeof(data)}(data, nc), _combine_names(bcf.args...),
+                        _combine_dimmeta(bcf.args...)...)
 end
 
 function Base.copy(bc::Base.Broadcast.Broadcasted{RVarStyle{N}}) where {N}
